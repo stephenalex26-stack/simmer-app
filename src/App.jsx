@@ -182,6 +182,7 @@ export default function App(){
   const[adventureExpanded,setAdventureExpanded]=useState(false);
   const[adventureLoading,setAdventureLoading]=useState(false);
   const[adventureSwapMode,setAdventureSwapMode]=useState(false);
+  const[scanStore,setScanStore]=useState("");
   const fileRef=useRef();
 
   // derived: user's stores
@@ -1159,7 +1160,9 @@ Return ONLY valid JSON:
           </div>
           <div className="fg">
             <label className="fl">Store</label>
-            <select className="fsel" defaultValue={scannedResult.storeName||userStores[0]||""} id="scan-store-select">
+            <select className="fsel"
+              value={scanStore||(scannedResult.storeName&&userStores.includes(scannedResult.storeName)?scannedResult.storeName:userStores[0])||scannedResult.storeName||""}
+              onChange={e=>setScanStore(e.target.value)}>
               {userStores.map(s=><option key={s} value={s}>{s}</option>)}
               {scannedResult.storeName&&!userStores.includes(scannedResult.storeName)&&
                 <option value={scannedResult.storeName}>{scannedResult.storeName}</option>}
@@ -1181,8 +1184,9 @@ Return ONLY valid JSON:
     {scannedResult&&<div className="mdl-ft">
       <button className="btn bs" onClick={()=>setScannedResult(null)}>Back</button>
       <button className="btn bg" onClick={()=>{
-        const sel=document.getElementById("scan-store-select");
-        savePurchase(scannedResult,sel?.value);
+        const store=scanStore||(scannedResult.storeName&&userStores.includes(scannedResult.storeName)?scannedResult.storeName:userStores[0])||scannedResult.storeName||"Unknown Store";
+        setScanStore("");
+        savePurchase(scannedResult,store);
       }}>Save to History</button>
     </div>}
   </div></div>}
@@ -1247,6 +1251,11 @@ function SupplyForm({s,stores,onSave,onClose}){
   </div>
   <div className="mdl-ft"><button className="btn bs" onClick={onClose}>Cancel</button><button className="btn bg" disabled={!n.trim()} onClick={()=>onSave({name:n.trim(),where:w,weeks:+wk||4,last:l||null})}>{s?"Save":"Track"}</button></div></>
 }
+  // pantry staple categories — items in these categories get added to pantry automatically
+  const PANTRY_CATS=["Dairy & Eggs","Canned & Dry","Condiments & Oils","Beverages"];
+  // keywords that indicate a pantry staple regardless of category
+  const PANTRY_KEYWORDS=["butter","milk","eggs","olive oil","vegetable oil","salt","pepper","flour","sugar","rice","pasta","soy sauce","vinegar","honey","garlic","onion","broth","stock","canned","beans","lentils","oats","cereal","juice","water","cheese","yogurt","cream","parmesan"];
+
   const savePurchase=(result,store)=>{
     const purchase={
       id:"p"+Date.now(),
@@ -1257,7 +1266,33 @@ function SupplyForm({s,stores,onSave,onClose}){
     };
     const updated=[purchase,...purchases].slice(0,50);
     sPh(updated);
-    setScannedResult(null);setScanText("");
-    flash(`Saved ${purchase.items.length} items from ${purchase.storeName}!`);
+
+    // ── Auto-update pantry from purchased items ──────────────────────────
+    // Any item that matches pantry categories or keywords gets added to pantry
+    // so it's auto-excluded from the next shopping list
+    const newPantryItems=[];
+    (result.items||[]).forEach(item=>{
+      const nameLower=(item.name||"").toLowerCase();
+      const isStaple=
+        PANTRY_CATS.includes(item.category)||
+        PANTRY_KEYWORDS.some(kw=>nameLower.includes(kw));
+      if(isStaple){
+        // use a clean short name for pantry — strip sizes and brand noise
+        const cleanName=item.name
+          .replace(/,?\s*\d+(\.\d+)?\s*(oz|lb|gal|fl oz|ct|count|pack).*/i,"")
+          .replace(/kirkland signature\s*/i,"")
+          .trim();
+        if(cleanName.length>2&&!pantry.some(p=>p.toLowerCase()===cleanName.toLowerCase())){
+          newPantryItems.push(cleanName);
+        }
+      }
+    });
+    if(newPantryItems.length>0){
+      sPa([...pantry,...newPantryItems]);
+    }
+
+    setScannedResult(null);setScanText("");setScanStore("");
+    const pantryMsg=newPantryItems.length>0?` · ${newPantryItems.length} added to pantry`:"";
+    flash(`Saved ${purchase.items.length} items from ${purchase.storeName}${pantryMsg}`);
     setModal(null);
   };
