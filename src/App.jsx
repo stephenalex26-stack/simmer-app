@@ -293,31 +293,67 @@ export default function App(){
     try{
       const pdfjsLib=await loadPdfJs();
       const arrayBuffer=await file.arrayBuffer();
-      const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+      const pdfData=new Uint8Array(arrayBuffer);
+      const pdf=await pdfjsLib.getDocument({data:pdfData}).promise;
+
+      // ── Strategy 1: extract text ──────────────────────────────────────────
       let fullText='';
       for(let i=1;i<=pdf.numPages;i++){
         const page=await pdf.getPage(i);
         const tc=await page.getTextContent();
-        // join items with spacing — preserve table structure as best we can
-        const pageText=tc.items.map(item=>item.str).join(' ');
-        fullText+=pageText+'\n';
+        // preserve column structure by keeping x-position gaps
+        const items=tc.items.sort((a,b)=>b.transform[5]-a.transform[5]||a.transform[4]-b.transform[4]);
+        let prevY=null;let line='';
+        for(const item of items){
+          const y=Math.round(item.transform[5]);
+          if(prevY!==null&&Math.abs(y-prevY)>3){fullText+=line.trim()+'\n';line='';}
+          line+=(item.str||'')+' ';
+          prevY=y;
+        }
+        if(line.trim())fullText+=line.trim()+'\n';
       }
-      if(!fullText.trim()){
-        flash("Couldn't extract text from this PDF — try the photo option");
-        setScanning(false);setPdfLoading(false);return;
-      }
-      // detect store from filename or content
-      const storeHint=file.name.toLowerCase().includes('costco')||fullText.toLowerCase().includes('costco')?'Costco':null;
-      const t=await aiVision({textContent:`PDF RECEIPT (${storeHint||'store unknown'}):
 
-${fullText.slice(0,8000)}`});
-      const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
-      // if store detected in content, override
-      if(storeHint&&!parsed.storeName)parsed.storeName=storeHint;
-      setScannedResult(parsed);
+      const storeHint=file.name.toLowerCase().includes('costco')||fullText.toLowerCase().includes('costco')?'Costco':
+                      file.name.toLowerCase().includes('sams')||fullText.toLowerCase().includes("sam's club")?"Sam's Club":null;
+
+      // if text extraction got meaningful content, use it
+      if(fullText.replace(/\s/g,'').length>100){
+        setPdfLoading(false);
+        const t=await aiVision({textContent:`PDF RECEIPT (${storeHint||file.name||'store unknown'}):\n\n${fullText.slice(0,10000)}`});
+        const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
+        if(storeHint&&!parsed.storeName)parsed.storeName=storeHint;
+        setScannedResult(parsed);
+        setScanning(false);return;
+      }
+
+      // ── Strategy 2: render pages as images and use vision API ────────────
+      // Handles PDFs with embedded fonts that block text extraction
+      setPdfLoading(false);
+      let allItems=[];let detectedStore=storeHint;let detectedDate=null;let detectedTotal=null;
+      for(let i=1;i<=Math.min(pdf.numPages,4);i++){
+        const page=await pdf.getPage(i);
+        const viewport=page.getViewport({scale:2.0});
+        const canvas=document.createElement('canvas');
+        canvas.width=viewport.width;canvas.height=viewport.height;
+        const ctx=canvas.getContext('2d');
+        await page.render({canvasContext:ctx,viewport}).promise;
+        const base64=canvas.toDataURL('image/jpeg',0.92).split(',')[1];
+        const t=await aiVision({imageBase64:base64,mimeType:'image/jpeg',
+          prompt:`This is page ${i} of a ${storeHint||'store'} receipt PDF rendered as an image. Extract every purchased item. Return ONLY valid JSON: {"storeName":"name or null","date":"YYYY-MM-DD or null","total":"amount or null","items":[{"name":"full readable name","quantity":1,"price":"amount or null","category":"Produce|Meat & Seafood|Dairy & Eggs|Bakery|Frozen|Canned & Dry|Snacks|Beverages|Household|Personal Care|Other"}]}`});
+        const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
+        if(parsed.storeName&&!detectedStore)detectedStore=parsed.storeName;
+        if(parsed.date&&!detectedDate)detectedDate=parsed.date;
+        if(parsed.total&&!detectedTotal)detectedTotal=parsed.total;
+        if(parsed.items?.length)allItems=[...allItems,...parsed.items];
+      }
+      if(!allItems.length){
+        flash("Couldn't read this PDF. Try taking a photo of the receipt instead.");
+        setScanning(false);return;
+      }
+      setScannedResult({storeName:detectedStore||'Unknown Store',date:detectedDate,total:detectedTotal,items:allItems});
     }catch(e){
       console.error('PDF scan error:',e);
-      flash('Could not read PDF — make sure it\'s a text-based receipt, not a scan');
+      flash("Something went wrong reading the PDF. Try the photo or email option.");
     }
     setScanning(false);setPdfLoading(false);
   };
@@ -967,7 +1003,8 @@ Return valid JSON:
           </div>
           {(scanning||pdfLoading)&&<div style={{textAlign:"center",marginTop:16}}>
             <div className="dots"><span/><span/><span/></div>
-            <p style={{fontSize:13,color:"var(--i3)",marginTop:8}}>{pdfLoading?"Extracting text from PDF...":"Reading items..."}</p>
+            <p style={{fontSize:13,color:"var(--i3)",marginTop:8}}>{pdfLoading?"Opening PDF...":scanning?"Reading items — this may take a moment...":""}</p>
+            {scanning&&!pdfLoading&&<p style={{fontSize:11,color:"var(--i4)",marginTop:4}}>AI is scanning each page</p>}
           </div>}
         </>}
 
