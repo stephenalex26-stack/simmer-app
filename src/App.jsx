@@ -29,7 +29,7 @@ const RECIPES=[
 const SUPPLIES=[
 {id:"s1",name:"Paper Towels",where:"Costco",weeks:4,last:null},{id:"s2",name:"Toilet Paper",where:"Costco",weeks:5,last:null},{id:"s3",name:"Trash Bags",where:"Costco",weeks:6,last:null},{id:"s4",name:"Dishwasher Pods",where:"Costco",weeks:5,last:null},{id:"s5",name:"Goldfish Crackers",where:"Costco",weeks:3,last:null},{id:"s6",name:"Granola Bars",where:"Costco",weeks:3,last:null},{id:"s7",name:"String Cheese",where:"Costco",weeks:2,last:null},{id:"s8",name:"Laundry Detergent",where:"Costco",weeks:8,last:null},
 ];
-const DEF_PREFS={meals:5,time:30,prepDays:["Sunday"],adults:2,kids:3,diet:"",proteinPriority:"medium",maxPastaPerWeek:2,maxRedMeatPerWeek:2,stores:["Wegmans","Costco"]};
+const DEF_PREFS={meals:5,time:30,prepDays:["Sunday"],adults:2,kids:3,diet:"",proteinPriority:"medium",maxPastaPerWeek:2,maxRedMeatPerWeek:2,stores:["Wegmans","Costco"],cuisines:[]};
 
 /* ── icons ── */
 const I={
@@ -493,12 +493,15 @@ export default function App(){
     const histNote=history.length>1?`\nRECENT WEEKS: ${history.slice(-4).map(h=>h.meals.join(", ")).join(" | ")}`:"";
     const purchaseNote=getPurchaseContext();
     const storeNote=userStores.length?`\nUSER'S STORES: ${userStores.join(", ")}. In the shoppingList, tag each item with the best store using "store" field. Bulk/household items go to ${userStores.find(s=>/costco|sam/i.test(s))||userStores[userStores.length-1]}, fresh produce/meat to ${userStores[0]}.`:"";
+    // Use explicit cuisine prefs if set, otherwise infer from recipe names
     const allNames=recipes.map(r=>r.name).join(" ").toLowerCase();
-    const cuisineHints=[];
-    if(allNames.match(/taco|fajita|burrito|mexican|salsa/))cuisineHints.push("Mexican");
-    if(allNames.match(/stir.?fry|teriyaki|asian|soy|sesame/))cuisineHints.push("Asian");
-    if(allNames.match(/pasta|bolognese|pesto|italian|parmesan/))cuisineHints.push("Italian");
-    if(allNames.match(/salmon|fish|shrimp/))cuisineHints.push("Seafood");
+    const cuisineHints=prefs.cuisines&&prefs.cuisines.length?[...prefs.cuisines]:[];
+    if(!cuisineHints.length){
+      if(allNames.match(/taco|fajita|burrito|mexican|salsa/))cuisineHints.push("Mexican");
+      if(allNames.match(/stir.?fry|teriyaki|asian|soy|sesame/))cuisineHints.push("Asian");
+      if(allNames.match(/pasta|bolognese|pesto|italian|parmesan/))cuisineHints.push("Italian");
+      if(allNames.match(/salmon|fish|shrimp/))cuisineHints.push("Seafood");
+    }
     const seed=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
     try{
       const t=await ai([{role:"user",content:`Plan ${prefs.meals} dinners. Seed:${seed}
@@ -709,6 +712,16 @@ Return ONLY valid JSON:
           <input className="fi" style={{flex:1}} placeholder="e.g. Trader Joe's, Whole Foods..." value={storeInput} onChange={e=>setStoreInput(e.target.value)}
             onKeyDown={e=>{if(e.key==="Enter"&&storeInput.trim()){const u=[...obStores,storeInput.trim()];setPrefs({...prefs,stores:u});setStoreInput("");}}}/>
           <button className="btn bs bsm" onClick={()=>{if(storeInput.trim()){const u=[...obStores,storeInput.trim()];setPrefs({...prefs,stores:u});setStoreInput("");}}}>Add</button>
+        </div>
+      </div>
+      <div className="fg" style={{textAlign:"left"}}>
+        <label className="fl">Favourite cuisines <small>(optional)</small></label>
+        <div className="dpick">
+          {["Italian","Mexican","Asian","Mediterranean","American","Indian","Japanese","Thai","Greek","Middle Eastern","Korean"].map(c=>{
+            const selected=(prefs.cuisines||[]).includes(c);
+            return <button key={c} className={`dchip ${selected?"on":""}`} style={{fontSize:12}}
+              onClick={()=>{const cur=prefs.cuisines||[];setPrefs({...prefs,cuisines:selected?cur.filter(x=>x!==c):[...cur,c]});}}>{c}</button>
+          })}
         </div>
       </div>
       <div className="fg" style={{textAlign:"left"}}>
@@ -1159,6 +1172,20 @@ Return ONLY valid JSON:
         <div className="fg"><label className="fl">Max red meat/wk</label><select className="fsel" value={prefs.maxRedMeatPerWeek??2} onChange={e=>sP({...prefs,maxRedMeatPerWeek:+e.target.value})}>{[0,1,2,3,4,5].map(n=><option key={n} value={n}>{n||"None"}</option>)}</select></div>
       </div>
       <div className="fg"><label className="fl">Dietary notes</label><textarea className="fta" style={{minHeight:60}} value={prefs.diet} onChange={e=>sP({...prefs,diet:e.target.value})} placeholder="No shellfish, low carb weekdays, love Mediterranean..."/></div>
+      <div className="fg">
+        <label className="fl">Cuisine preferences <small>(tap to select)</small></label>
+        <p style={{fontSize:12,color:"var(--i3)",marginBottom:8}}>AI will lean toward these cuisines when suggesting meals</p>
+        <div className="dpick">
+          {["Italian","Mexican","Asian","Mediterranean","American","Indian","Japanese","Thai","Greek","Middle Eastern","French","Korean","Chinese","Vietnamese","Spanish"].map(c=>{
+            const selected=(prefs.cuisines||[]).includes(c);
+            return <button key={c} className={`dchip ${selected?"on":""}`}
+              onClick={()=>{
+                const cur=prefs.cuisines||[];
+                sP({...prefs,cuisines:selected?cur.filter(x=>x!==c):[...cur,c]});
+              }}>{c}</button>
+          })}
+        </div>
+      </div>
     </div>
   </>}
   </main>
