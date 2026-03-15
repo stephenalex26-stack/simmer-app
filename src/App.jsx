@@ -183,8 +183,6 @@ export default function App(){
   const[adventureLoading,setAdventureLoading]=useState(false);
   const[adventureSwapMode,setAdventureSwapMode]=useState(false);
   const fileRef=useRef();
-  const pdfRef=useRef();
-  const[pdfLoading,setPdfLoading]=useState(false);
 
   // derived: user's stores
   const userStores=prefs.stores||["Wegmans","Costco"];
@@ -267,10 +265,12 @@ export default function App(){
   };
 
   // ── Smart receipt text parser ─────────────────────────────────────────────
-  // Detects format, parses client-side where possible, AI only for categorization
   const parseReceiptText=(text)=>{
-    const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
-    const lower=text.toLowerCase();
+    // normalize — handle both newline-separated and space-separated (PDF binary extract)
+    const normalized=text.replace(/\r/g,'\n').replace(/[ \t]+/g,' ');
+    const lower=normalized.toLowerCase();
+
+    // detect store
     let storeName=null;
     if(lower.includes('costco'))storeName='Costco';
     else if(lower.includes('wegmans'))storeName='Wegmans';
@@ -279,30 +279,76 @@ export default function App(){
     else if(lower.includes('target'))storeName='Target';
     else if(lower.includes('walmart'))storeName='Walmart';
     else if(lower.includes('amazon fresh'))storeName='Amazon Fresh';
+
+    // detect total — match "Total: $172.53" but NOT "Items Subtotal"
     let total=null;
-    const totalMatch=text.match(/Total[:\s]+\$?([\d,]+\.\d{2})/i);
-    if(totalMatch)total='$'+totalMatch[1];
+    const totalM=normalized.match(/(?<!Sub)Total[:\s]+\$?([\d,]+\.\d{2})/i);
+    if(totalM)total='$'+totalM[1];
+
+    // detect date
     let date=null;
-    const dateMatch=text.match(/(\d{4}-\d{2}-\d{2})|(\w+ \d{1,2},? \d{4})|(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-    if(dateMatch){try{const d=new Date(dateMatch[0]);if(!isNaN(d))date=d.toISOString().split('T')[0];}catch{}}
-    const instacartPattern=/^(\d+)\s+x\s+(.{8,})$/;
-    const instacartItems=[];
-    for(let i=0;i<lines.length;i++){
-      const m=lines[i].match(instacartPattern);
-      if(!m)continue;
-      const qty=parseInt(m[1]);
-      const name=m[2].trim();
-      if(!/[a-zA-Z]{3,}/.test(name))continue;
+    const dateM=normalized.match(/(\d{4}-\d{2}-\d{2})|(\w+ \d{1,2},? \d{4})|(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+    if(dateM){try{const d=new Date(dateM[0]);if(!isNaN(d))date=d.toISOString().split('T')[0];}catch{}}
+
+    // ── Costco/Instacart PDF format ──────────────────────────────────────────
+    // These PDFs dump sale prices at the TOP before the item list, in pairs:
+    // sale_price original_price sale_price original_price ...
+    // Then items appear as "N x Product Name\nItem CODE\nsize\n[✓ Save $X]\n[$price if no sale]"
+    const itemsStart=normalized.search(/Items Found|\d+\s+x\s+[A-Za-z]/);
+    const headerText=itemsStart>0?normalized.slice(0,itemsStart):'';
+    const bodyText=itemsStart>0?normalized.slice(itemsStart):normalized;
+
+    // Extract header prices in order — pairs of (sale, original)
+    // Every even-index price (0,2,4...) is the paid/sale price
+    const headerPrices=(headerText.match(/\$([\d]+\.[\d]{2})/g)||[]).map(p=>p);
+    const saleQueue=[];
+    for(let i=0;i<headerPrices.length;i+=2)saleQueue.push(headerPrices[i]);
+    let saleIdx=0;
+
+    // Split body into item segments on "N x ProductName" pattern
+    const segSplit=bodyText.split(/(?=\d+\s+x\s+[A-Za-z])/);
+    const items=[];
+
+    for(const seg of segSplit){
+      const itemM=seg.match(/^(\d+)\s+x\s+(.+)/s);
+      if(!itemM)continue;
+      const qty=parseInt(itemM[1]);
+      let rest=itemM[2];
+
+      // extract name: everything before "Item NNNNN"
+      const nameM=rest.match(/^(.+?)\s+Item\s+\d/);
+      let name=nameM?nameM[1].trim():rest.split(/\n/)[0].trim();
+      // clean trailing size descriptors from name
+      name=name.replace(/,?\s*\d+(\.\d+)?\s*(oz|lb|gal|ct|count)\s*,?\s*\d*\s*(pack|count)?\s*$/i,'').trim();
+      name=name.replace(/,\s*$/,'').trim();
+
+      // skip size-only false positives like "4 x 8 oz"
+      if(!name||!/[a-zA-Z]{4,}/.test(name))continue;
+      // skip totals/subtotals
+      if(/subtotal|tip|credit|discount|total/i.test(name))continue;
+
+      // find price in this segment (items without sale have price directly)
+      const segPrices=(seg.match(/\$([\d]+\.[\d]{2})/g)||[])
+        .filter(p=>{
+          // exclude prices that look like they're in "Save $X" context
+          const idx=seg.indexOf(p);
+          const before=seg.slice(Math.max(0,idx-10),idx);
+          return !/save|credit|tip|subtotal|total/i.test(before);
+        });
+
       let price=null;
-      for(let j=i+1;j<Math.min(i+9,lines.length);j++){
-        const l=lines[j];
-        if(l.startsWith('~~')||l.startsWith('Item ')||l.startsWith('✓')||l.startsWith('Save'))continue;
-        const pm=l.match(/^\$(\d+\.\d{2})$/);
-        if(pm){price='$'+pm[1];break;}
+      if(segPrices.length>0){
+        // use first non-discount price in segment
+        price=segPrices[0];
+      } else if(saleIdx<saleQueue.length){
+        // no price in segment = this item had a sale, use next from header queue
+        price=saleQueue[saleIdx++];
       }
-      instacartItems.push({name,quantity:qty,price,category:'Other'});
+
+      items.push({name,quantity:qty,price:price||null,category:'Other'});
     }
-    if(instacartItems.length>=2)return{storeName,date,total,items:instacartItems,_parsed:true};
+
+    if(items.length>=2)return{storeName,date,total,items,_parsed:true};
     return null;
   };
 
@@ -343,59 +389,8 @@ export default function App(){
     setScanning(false);
   };
 
-  // PDF text extraction — no external library needed
-
-  const scanPdf=async(file)=>{
-    setScanning(true);setPdfLoading(true);setScannedResult(null);
-    try{
-      // Read PDF as raw text using FileReader
-      const text=await new Promise((resolve,reject)=>{
-        const reader=new FileReader();
-        reader.onload=e=>{
-          // PDFs contain readable text mixed with binary — extract the readable parts
-          const raw=e.target.result;
-          // pull out all readable ASCII strings of length > 3
-          const strings=raw.match(/[ -~]{4,}/g)||[];
-          resolve(strings.join(' '));
-        };
-        reader.onerror=reject;
-        reader.readAsBinaryString(file);
-      });
-
-      const storeHint=file.name.toLowerCase().includes('costco')?'Costco':
-        text.toLowerCase().includes('costco')?'Costco':null;
-
-      // Try client-side Instacart parser first
-      const clientResult=parseReceiptText(text);
-      if(clientResult&&clientResult.items.length>=2){
-        if(storeHint&&!clientResult.storeName)clientResult.storeName=storeHint;
-        setScannedResult(clientResult);
-        setScanning(false);setPdfLoading(false);return;
-      }
-
-      // Send to AI with the raw text
-      setPdfLoading(false);
-      const raw=await aiVision({textContent:`PDF RECEIPT (${storeHint||'grocery store'}):\n\n${text.slice(0,12000)}`});
-      const cleaned=raw.replace(/```json|```/g,'').trim();
-      const s=cleaned.indexOf('{');const e2=cleaned.lastIndexOf('}');
-      if(s>=0&&e2>s){
-        const parsed=JSON.parse(cleaned.slice(s,e2+1));
-        if(parsed.items?.length){
-          if(storeHint&&!parsed.storeName)parsed.storeName=storeHint;
-          setScannedResult(parsed);
-          setScanning(false);setPdfLoading(false);return;
-        }
-      }
-      flash("Couldn't read this PDF — paste the receipt text in the box below");
-    }catch(e){
-      console.error('PDF error:',e);
-      flash("Couldn't read this PDF — paste the receipt text in the box below");
-    }
-    setScanning(false);setPdfLoading(false);
-  };
 
 
-  // ── Purchase history summary for AI ──
   const getPurchaseContext=()=>{
     if(!purchases.length)return"";
     const recent=purchases.slice(0,10);
@@ -1115,36 +1110,42 @@ Return ONLY valid JSON:
     <div className="mdl-hd"><h3>Add Receipt</h3><button className="ib" onClick={()=>setModal(null)}>{I.x}</button></div>
     <div className="mdl-bd">
       {!scannedResult?<>
-        {/* single smart upload zone */}
         <input type="file" ref={fileRef} accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>{if(e.target.files[0])scanImage(e.target.files[0])}}/>
-        <input type="file" ref={pdfRef} accept="application/pdf" style={{display:"none"}} onChange={e=>{if(e.target.files[0])scanPdf(e.target.files[0])}}/>
 
-        {/* two big tap targets */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-          <div className="upload-zone" style={{padding:"20px 12px"}} onClick={()=>fileRef.current?.click()}>
-            <div style={{fontSize:28,marginBottom:6}}>📷</div>
-            <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>Photo</div>
-            <div style={{fontSize:11,color:"var(--i3)",marginTop:2}}>Snap or upload</div>
-          </div>
-          <div className="upload-zone" style={{padding:"20px 12px"}} onClick={()=>pdfRef.current?.click()}>
-            <div style={{fontSize:28,marginBottom:6}}>📄</div>
-            <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>PDF</div>
-            <div style={{fontSize:11,color:"var(--i3)",marginTop:2}}>Any format</div>
+        {/* paste is the primary path — every store sends email receipts */}
+        <div style={{marginBottom:12}}>
+          <label className="fl">Paste your receipt or order confirmation email</label>
+          <div style={{position:"relative"}}>
+            <textarea className="fta" style={{minHeight:140,fontSize:13,paddingBottom:48}}
+              value={scanText} onChange={e=>setScanText(e.target.value)}
+              placeholder={"Paste your Instacart, Costco, Wegmans, or any grocery confirmation email here..."}
+              autoFocus/>
+            {scanText.trim()&&<button className="btn bg"
+              style={{position:"absolute",bottom:8,right:8,left:8,width:"auto",padding:"9px",fontSize:13}}
+              disabled={scanning} onClick={scanTextContent}>
+              {scanning?<><div className="dots" style={{padding:0,display:"inline-flex",gap:4}}><span/><span/><span/></div> Reading...</>:"Read Receipt"}
+            </button>}
           </div>
         </div>
 
-        {/* paste area — works for email, text, anything */}
-        <div style={{position:"relative"}}>
-          <textarea className="fta" style={{minHeight:110,fontSize:13,paddingRight:70}}
-            value={scanText} onChange={e=>setScanText(e.target.value)}
-            placeholder="Or paste anything here — Instacart email, order confirmation, receipt text..."/>
-          {scanText.trim()&&<button className="btn bg" style={{position:"absolute",bottom:10,right:10,width:"auto",padding:"8px 14px",fontSize:12}}
-            onClick={scanTextContent}>Read it</button>}
+        {/* photo as secondary option */}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
+          <div style={{flex:1,height:1,background:"var(--sand)"}}/>
+          <span style={{fontSize:11,color:"var(--i3)",fontWeight:600}}>OR</span>
+          <div style={{flex:1,height:1,background:"var(--sand)"}}/>
+        </div>
+        <div className="upload-zone" style={{padding:"14px",marginTop:10,display:"flex",alignItems:"center",gap:12,textAlign:"left"}}
+          onClick={()=>fileRef.current?.click()}>
+          <div style={{fontSize:24}}>📷</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>Take or upload a photo</div>
+            <div style={{fontSize:11,color:"var(--i3)"}}>Photo of a printed receipt</div>
+          </div>
         </div>
 
-        {(scanning||pdfLoading)&&<div style={{textAlign:"center",marginTop:16}}>
+        {scanning&&!scanText.trim()&&<div style={{textAlign:"center",marginTop:16}}>
           <div className="dots"><span/><span/><span/></div>
-          <p style={{fontSize:13,color:"var(--i3)",marginTop:8}}>{pdfLoading?"Reading PDF...":"Reading receipt..."}</p>
+          <p style={{fontSize:13,color:"var(--i3)",marginTop:8}}>Reading receipt...</p>
         </div>}
       </>:<>
         {/* scanned result review */}
@@ -1246,3 +1247,17 @@ function SupplyForm({s,stores,onSave,onClose}){
   </div>
   <div className="mdl-ft"><button className="btn bs" onClick={onClose}>Cancel</button><button className="btn bg" disabled={!n.trim()} onClick={()=>onSave({name:n.trim(),where:w,weeks:+wk||4,last:l||null})}>{s?"Save":"Track"}</button></div></>
 }
+  const savePurchase=(result,store)=>{
+    const purchase={
+      id:"p"+Date.now(),
+      date:result.date||new Date().toISOString().split("T")[0],
+      storeName:store||result.storeName||"Unknown Store",
+      total:result.total||null,
+      items:result.items||[],
+    };
+    const updated=[purchase,...purchases].slice(0,50);
+    sPh(updated);
+    setScannedResult(null);setScanText("");
+    flash(`Saved ${purchase.items.length} items from ${purchase.storeName}!`);
+    setModal(null);
+  };
