@@ -1,12 +1,17 @@
 import { useState, useRef } from "react";
 
-/*  SIMMER v5 — simmer-app.netlify.app
+/*  SIMMER v5.2 — simmer-app.netlify.app
     New in v5:
     • Custom stores per user (onboarding + settings)
     • Receipt/purchase scanner — photo, manual text, paste email
     • Purchase history with AI learning
     • Shopping list split by store
-    • Restock store dropdown uses user's custom stores  */
+    • Restock store dropdown uses user's custom stores
+    v5.1 fixes:
+    • Ingredient accountability — every ingredient named in steps
+    • Adventure suggestion — one fun cuisine-stretch recipe per plan
+    v5.2 additions:
+    • PDF receipt support (Costco + any text PDF) via PDF.js client-side extraction  */
 
 const LS={r:"sm4-recipes",p:"sm4-prefs",pl:"sm4-plan",s:"sm4-supplies",ck:"sm4-checked",rt:"sm4-ratings",pa:"sm4-pantry",hi:"sm4-history",ph:"sm5-purchases"};
 const ld=(k,f)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):f}catch{return f}};
@@ -176,6 +181,8 @@ export default function App(){
   const[scannedResult,setScannedResult]=useState(null);
   const[storeInput,setStoreInput]=useState("");
   const fileRef=useRef();
+  const pdfRef=useRef();
+  const[pdfLoading,setPdfLoading]=useState(false);
 
   // derived: user's stores
   const userStores=prefs.stores||["Wegmans","Costco"];
@@ -268,7 +275,55 @@ export default function App(){
     setScanning(false);
   };
 
-  const savePurchase=(result,store)=>{
+  // ── PDF extraction via PDF.js (client-side, no backend needed) ──
+  const loadPdfJs=()=>new Promise((resolve,reject)=>{
+    if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
+    const script=document.createElement('script');
+    script.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.onload=()=>{
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve(window.pdfjsLib);
+    };
+    script.onerror=()=>reject(new Error('PDF.js failed to load'));
+    document.head.appendChild(script);
+  });
+
+  const scanPdf=async(file)=>{
+    setScanning(true);setPdfLoading(true);setScannedResult(null);
+    try{
+      const pdfjsLib=await loadPdfJs();
+      const arrayBuffer=await file.arrayBuffer();
+      const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+      let fullText='';
+      for(let i=1;i<=pdf.numPages;i++){
+        const page=await pdf.getPage(i);
+        const tc=await page.getTextContent();
+        // join items with spacing — preserve table structure as best we can
+        const pageText=tc.items.map(item=>item.str).join(' ');
+        fullText+=pageText+'
+';
+      }
+      if(!fullText.trim()){
+        flash("Couldn't extract text from this PDF — try the photo option");
+        setScanning(false);setPdfLoading(false);return;
+      }
+      // detect store from filename or content
+      const storeHint=file.name.toLowerCase().includes('costco')||fullText.toLowerCase().includes('costco')?'Costco':null;
+      const t=await aiVision({textContent:`PDF RECEIPT (${storeHint||'store unknown'}):
+
+${fullText.slice(0,8000)}`});
+      const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
+      // if store detected in content, override
+      if(storeHint&&!parsed.storeName)parsed.storeName=storeHint;
+      setScannedResult(parsed);
+    }catch(e){
+      console.error('PDF scan error:',e);
+      flash('Could not read PDF — make sure it\'s a text-based receipt, not a scan');
+    }
+    setScanning(false);setPdfLoading(false);
+  };
+
+    const savePurchase=(result,store)=>{
     const purchase={
       id:"p"+Date.now(),
       date:result.date||new Date().toISOString().split("T")[0],
@@ -366,18 +421,33 @@ CRITICAL FORMATTING RULES:
 - shoppingList items: each item is a string, but ALSO include a "storeMap" object that maps item names to store names
 - Each meal needs "noPrepFinish" array
 
+INGREDIENT ACCOUNTABILITY (most important rule):
+- Every single ingredient listed in "ingredients" MUST appear by name in either the prep steps or the finish steps — no exceptions.
+- Example: if ingredients include "1 lb Italian chicken sausage", then a prep or finish step must say "...add Italian chicken sausage..." or "...slice chicken sausage...". 
+- NEVER write finish steps that only mention the sauce or the dish in general — always call out the protein, the vegetables, and the key ingredients by name.
+- Bad finish step: "Reheat sauce, add spinach, toss with pasta" — missing the protein entirely.
+- Good finish step: "Reheat chicken sausage and tomato sauce over medium heat, add 2 cups spinach, wilt 2 min, toss with pasta, top with parmesan."
+- Before finalizing each meal, mentally check: does every ingredient show up in a step? If not, add it.
+
+ADVENTURE SUGGESTION:
+- Include exactly one "adventureSuggestion" object in the response — a fun recipe from a cuisine this family has NOT been eating (look at their history and pick something totally different).
+- This is presented as a gentle "maybe try this sometime?" not a scheduled meal.
+- Keep it achievable: under 35 min, family-friendly, easy to find ingredients.
+- Format: {"name":"dish name","cuisine":"e.g. Thai","why":"one warm sentence on why they might love it","time":25,"teaser":"one vivid sentence describing the dish"}
+
 Return valid JSON:
 {"title":"creative theme","cost":"$XX-$XX","savings":"tip",
 "meals":[{"day":"Monday","name":"Recipe Name","time":15,
-"ingredients":["1 lb ground beef","1 onion (diced)"],
-"prep":["Brown beef 5 min","Add onion 3 min"],
-"finish":["Reheat sauce","Boil pasta 8 min"],
-"noPrepFinish":["Dice onion","Brown beef..."],
+"ingredients":["1 lb Italian chicken sausage","1 onion (diced)","12 oz penne","2 cups spinach","1/2 cup parmesan"],
+"prep":["Slice 1 lb Italian chicken sausage into rounds","Brown sausage in skillet 5 min, set aside","Dice 1 onion, cook in same pan 3 min","Add crushed tomatoes and seasoning, simmer 10 min","Stir sausage back into sauce, refrigerate"],
+"finish":["Boil 12 oz penne per package directions","Reheat chicken sausage and tomato sauce over medium","Add 2 cups spinach, stir until wilted 2 min","Drain pasta, toss with sausage sauce","Top with 1/2 cup parmesan and serve"],
+"noPrepFinish":["Slice sausage, brown 5 min","Dice onion, cook 3 min","Add tomatoes + seasoning, simmer 10 min","Boil pasta while sauce simmers","Toss pasta with sauce + spinach + parmesan"],
 "shared":["rice"]}],
 "prepGuide":{"minutes":75,"summary":["Cooked rice","Browned beef"],"steps":["Cook 6 cups rice","Slice peppers"]},
 "shoppingList":{"Vegetables":["3 bell peppers","2 onions"],"Fruits":[],"Meat & Seafood":["1.5 lb chicken thighs"],"Dairy & Eggs":["1/2 cup parmesan"],"Herbs & Spices":["fresh cilantro"],"Grains & Pasta":["1 lb spaghetti"],"Canned & Dry":["28oz crushed tomatoes"],"Condiments & Oils":["soy sauce"],"Frozen":[],"Bakery & Bread":["8 flour tortillas"],"Other":[]},
 "storeMap":{"3 bell peppers":"${userStores[0]||"Wegmans"}","8 flour tortillas":"${userStores[0]||"Wegmans"}","28oz crushed tomatoes":"${userStores.find(s=>/costco|sam/i.test(s))||userStores[userStores.length-1]||"Costco"}"},
 "reused":{"rice":["Stir-Fry","Taco Bowls"]},
+"adventureSuggestion":{"name":"Chicken Larb","cuisine":"Thai","why":"Your family loves bold flavors and this is bright, herby, and totally different from anything on your usual rotation.","time":25,"teaser":"Ground chicken tossed with toasted rice, lime juice, fish sauce, and fresh herbs — served over rice with crispy lettuce cups."},
 "supplyReminders":[]}`}]);
       const parsed=JSON.parse(t.replace(/```json|```/g,"").trim());
       sPl(parsed);sC({});setExpanded({});setSwapPicker(null);
@@ -563,6 +633,13 @@ Return valid JSON:
     {plan&&<>
       {plan.savings&&<div className="nudge nudge-sa"><b>💡</b><span>{plan.savings}</span></div>}
       {plan.supplyReminders?.length>0&&<div className="nudge nudge-am"><b>🏠</b><div>{plan.supplyReminders.map((r,i)=><div key={i}>{r}</div>)}</div></div>}
+      {plan.adventureSuggestion&&<div style={{background:"linear-gradient(135deg,#F5F0FF 0%,#FFF8EE 100%)",border:"1.5px solid #D8C8F0",borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".8px",color:"#7C5AB8",marginBottom:4}}>✨ Maybe try this sometime?</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}><span style={{fontFamily:"var(--hd)",fontSize:16,fontWeight:500}}>{plan.adventureSuggestion.name}</span><span style={{fontSize:11,fontWeight:700,color:"#7C5AB8",background:"#EDE4FF",padding:"2px 8px",borderRadius:10}}>{plan.adventureSuggestion.cuisine}</span></div>
+        <div style={{fontSize:13,color:"var(--i2)",lineHeight:1.5,marginBottom:5}}>{plan.adventureSuggestion.teaser}</div>
+        <div style={{fontSize:12,color:"#6B4FA0",fontStyle:"italic",marginBottom:4}}>{plan.adventureSuggestion.why}</div>
+        <div style={{fontSize:11,color:"var(--i3)"}}>⏱ {plan.adventureSuggestion.time} min · family-friendly</div>
+      </div>}
       {plan.reused&&Object.keys(plan.reused).length>0&&<div style={{marginBottom:14}}><span style={{fontSize:12,fontWeight:700,color:"var(--i3)"}}>SHARED: </span>{Object.entries(plan.reused).map(([k,v])=><span key={k} className="sp">{k} ×{v.length}</span>)}</div>}
       {plan.prepGuide&&<div className="prb"><div className="prb-t">🔪 {(prefs.prepDays||["Sunday"]).join(" & ")} Prep — ~{plan.prepGuide.minutes} min</div>{plan.prepGuide.summary&&<div style={{marginBottom:12,padding:"10px 14px",background:"rgba(255,255,255,.6)",borderRadius:10}}><div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",color:"var(--sa)",marginBottom:6}}>After prep you'll have</div>{fmt(plan.prepGuide.summary).map((s,i)=><div key={i} style={{fontSize:13,color:"#2B5E3B",padding:"2px 0",paddingLeft:16,position:"relative"}}><span style={{position:"absolute",left:0}}>✓</span>{s}</div>)}</div>}<ol>{plan.prepGuide.steps.map((s,i)=><li key={i}>{s}</li>)}</ol></div>}
       {plan.meals?.map((m,i)=><div className="dc" key={i}>
@@ -863,8 +940,9 @@ Return valid JSON:
         {/* tabs */}
         <div className="tab-strip" style={{marginBottom:16}}>
           <button className={`tab-btn ${scanTab==="photo"?"on":""}`} onClick={()=>setScanTab("photo")}>📷 Photo</button>
-          <button className={`tab-btn ${scanTab==="text"?"on":""}`} onClick={()=>setScanTab("text")}>✏️ Type it in</button>
-          <button className={`tab-btn ${scanTab==="email"?"on":""}`} onClick={()=>setScanTab("email")}>📧 Paste email</button>
+          <button className={`tab-btn ${scanTab==="pdf"?"on":""}`} onClick={()=>setScanTab("pdf")}>📄 PDF</button>
+          <button className={`tab-btn ${scanTab==="email"?"on":""}`} onClick={()=>setScanTab("email")}>📧 Email</button>
+          <button className={`tab-btn ${scanTab==="text"?"on":""}`} onClick={()=>setScanTab("text")}>✏️ Type</button>
         </div>
 
         {/* photo upload */}
@@ -878,13 +956,20 @@ Return valid JSON:
           {scanning&&<div style={{textAlign:"center",marginTop:16}}><div className="dots"><span/><span/><span/></div><p style={{fontSize:13,color:"var(--i3)",marginTop:8}}>Reading receipt...</p></div>}
         </>}
 
-        {/* manual text */}
-        {scanTab==="text"&&<>
-          <div className="fg">
-            <label className="fl">Type or paste what you bought</label>
-            <textarea className="fta" style={{minHeight:120}} value={scanText} onChange={e=>setScanText(e.target.value)} placeholder={"Wegmans\n\nChicken breast 2lb $8.99\nOrganic spinach $3.49\nMilk whole gallon $4.29\nCheddar cheese block $6.99"}/>
+        {/* PDF upload — Costco + any text-based PDF */}
+        {scanTab==="pdf"&&<>
+          <input type="file" ref={pdfRef} accept="application/pdf" style={{display:"none"}} onChange={e=>{if(e.target.files[0])scanPdf(e.target.files[0])}}/>
+          <div className="nudge nudge-bl" style={{marginBottom:12}}><b>📄</b><span><b>Costco members:</b> sign in at costco.com → Orders & Returns → find your order → Download PDF Receipt. Then upload it here.</span></div>
+          <div className="upload-zone" onClick={()=>pdfRef.current?.click()}>
+            <div style={{fontSize:36,marginBottom:8}}>📄</div>
+            <div style={{fontFamily:"var(--hd)",fontSize:16,fontWeight:500,marginBottom:4}}>Upload PDF receipt</div>
+            <div style={{fontSize:13,color:"var(--i3)",marginBottom:4}}>Works with Costco, Sam's Club, and any text-based PDF</div>
+            <div style={{fontSize:11,color:"var(--i4)"}}>PDF must be a digital receipt — not a scanned image</div>
           </div>
-          <button className="btn bg" disabled={!scanText.trim()||scanning} onClick={scanTextContent}>{scanning?<><div className="dots" style={{padding:0,display:"inline-flex"}}><span/><span/><span/></div> Reading...</>:"Parse Items"}</button>
+          {(scanning||pdfLoading)&&<div style={{textAlign:"center",marginTop:16}}>
+            <div className="dots"><span/><span/><span/></div>
+            <p style={{fontSize:13,color:"var(--i3)",marginTop:8}}>{pdfLoading?"Extracting text from PDF...":"Reading items..."}</p>
+          </div>}
         </>}
 
         {/* email paste */}
@@ -895,6 +980,15 @@ Return valid JSON:
             <textarea className="fta" style={{minHeight:120}} value={scanText} onChange={e=>setScanText(e.target.value)} placeholder="Paste the full email text here..."/>
           </div>
           <button className="btn bg" disabled={!scanText.trim()||scanning} onClick={scanTextContent}>{scanning?<><div className="dots" style={{padding:0,display:"inline-flex"}}><span/><span/><span/></div> Reading...</>:"Extract Items"}</button>
+        </>}
+
+        {/* manual text */}
+        {scanTab==="text"&&<>
+          <div className="fg">
+            <label className="fl">Type or paste what you bought</label>
+            <textarea className="fta" style={{minHeight:120}} value={scanText} onChange={e=>setScanText(e.target.value)} placeholder={"Wegmans\n\nChicken breast 2lb $8.99\nOrganic spinach $3.49\nMilk whole gallon $4.29\nCheddar cheese block $6.99"}/>
+          </div>
+          <button className="btn bg" disabled={!scanText.trim()||scanning} onClick={scanTextContent}>{scanning?<><div className="dots" style={{padding:0,display:"inline-flex"}}><span/><span/><span/></div> Reading...</>:"Parse Items"}</button>
         </>}
       </>:<>
         {/* scanned result review */}
