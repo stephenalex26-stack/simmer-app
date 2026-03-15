@@ -121,7 +121,7 @@ Categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery, Frozen, Canned & Dry,
       }
 
       const data = await xai(apiKey, {
-        model: "grok-2-vision-latest",
+        model: "grok-4-1-fast-non-reasoning",
         max_tokens: 4096,
         temperature: 0.1,
         messages: [
