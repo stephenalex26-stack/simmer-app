@@ -181,6 +181,7 @@ export default function App(){
   const[storeInput,setStoreInput]=useState("");
   const[adventureExpanded,setAdventureExpanded]=useState(false);
   const[adventureLoading,setAdventureLoading]=useState(false);
+  const[adventureSwapMode,setAdventureSwapMode]=useState(false);
   const fileRef=useRef();
   const pdfRef=useRef();
   const[pdfLoading,setPdfLoading]=useState(false);
@@ -305,114 +306,30 @@ export default function App(){
     return null;
   };
 
-  // ── PDF: render pages as images → vision API (most reliable approach) ────
-  const loadPdfJs=()=>new Promise((resolve,reject)=>{
-    if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
-    const script=document.createElement('script');
-    script.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    script.onload=()=>{
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      resolve(window.pdfjsLib);
-    };
-    script.onerror=()=>reject(new Error('PDF.js failed to load'));
-    document.head.appendChild(script);
-  });
-
-  const scanPdf=async(file)=>{
-    setScanning(true);setPdfLoading(true);setScannedResult(null);
-    try{
-      const pdfjsLib=await loadPdfJs();
-      const arrayBuffer=await file.arrayBuffer();
-      const pdf=await pdfjsLib.getDocument({data:new Uint8Array(arrayBuffer)}).promise;
-      const totalPages=Math.min(pdf.numPages,5);
-      let allItems=[];
-      let detectedStore=file.name.toLowerCase().includes('costco')?'Costco':null;
-      let detectedDate=null;
-      let detectedTotal=null;
-
-      for(let pageNum=1;pageNum<=totalPages;pageNum++){
-        const page=await pdf.getPage(pageNum);
-        // render at scale 2 for crisp text
-        const viewport=page.getViewport({scale:2});
-        const canvas=document.createElement('canvas');
-        canvas.width=viewport.width;
-        canvas.height=viewport.height;
-        await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
-
-        // split tall pages into 1200px chunks so vision API can read each section
-        const CHUNK=1200;
-        const chunks=Math.ceil(canvas.height/CHUNK);
-        for(let c=0;c<chunks;c++){
-          const sliceH=Math.min(CHUNK,canvas.height-c*CHUNK);
-          if(sliceH<50)continue;
-          const slice=document.createElement('canvas');
-          slice.width=canvas.width;slice.height=sliceH;
-          slice.getContext('2d').drawImage(canvas,0,c*CHUNK,canvas.width,sliceH,0,0,canvas.width,sliceH);
-          const b64=slice.toDataURL('image/jpeg',0.9).split(',')[1];
-          if(!b64||b64.length<200)continue;
-          try{
-            const t=await aiVision({
-              imageBase64:b64,
-              mimeType:'image/jpeg',
-              prompt:`This is part of a grocery receipt. Extract every purchased item shown. Each item line looks like "1 x Product Name $price". Skip Item codes, strikethrough prices, tip, subtotal, and total lines. Return ONLY valid JSON: {"storeName":"store or null","date":"YYYY-MM-DD or null","total":"$amount or null","items":[{"name":"full product name","quantity":1,"price":"$amount or null","category":"Produce|Meat & Seafood|Dairy & Eggs|Bakery|Frozen|Canned & Dry|Snacks|Beverages|Household|Personal Care|Other"}]}`
-            });
-            const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
-            if(parsed.storeName&&!detectedStore)detectedStore=parsed.storeName;
-            if(parsed.date&&!detectedDate)detectedDate=parsed.date;
-            if(parsed.total&&!detectedTotal)detectedTotal=parsed.total;
-            if(parsed.items?.length)allItems=[...allItems,...parsed.items];
-          }catch(e){console.warn('chunk failed:',e);}
-        }
-      }
-
-      // deduplicate by name
-      const seen=new Set();
-      allItems=allItems.filter(it=>{
-        const k=(it.name||'').toLowerCase().trim();
-        if(!k||k.length<3||seen.has(k))return false;
-        seen.add(k);return true;
-      });
-
-      if(!allItems.length){
-        flash("Couldn't read this PDF — try pasting the email text in the text box below");
-        setScanning(false);setPdfLoading(false);return;
-      }
-      setScannedResult({storeName:detectedStore||'Unknown Store',date:detectedDate,total:detectedTotal,items:allItems});
-    }catch(e){
-      console.error('PDF error:',e);
-      flash("PDF failed — paste the receipt text in the box below instead");
-    }
-    setScanning(false);setPdfLoading(false);
-  };
-
-    const scanTextContent=async()=>{
+  const scanTextContent=async()=>{
     if(!scanText.trim())return;
     setScanning(true);setScannedResult(null);
     try{
       const text=scanText.trim();
-
-      // try client-side parse first — instant, no AI call, no failure risk
-      const clientParsed=parseReceiptText(text);
-      if(clientParsed&&clientParsed.items.length>0){
-        // use AI only to add categories — send just the item names
+      // try client-side parser first
+      const clientResult=parseReceiptText(text);
+      if(clientResult&&clientResult.items.length>0){
         try{
-          const nameList=clientParsed.items.map((it,i)=>`${i}|${it.name}`).join('\n');
-          const catRaw=await ai([{role:'user',content:`Categorize these grocery items. Return ONLY a JSON array where each element is the category for that item index, in order. Categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery, Frozen, Canned & Dry, Snacks, Beverages, Household, Personal Care, Other.\n\n${nameList}\n\nExample response: ["Snacks","Dairy & Eggs","Produce"]`}]);
+          const nameList=clientResult.items.map((it,i)=>`${i}|${it.name}`).join('\n');
+          const catRaw=await ai([{role:'user',content:`Categorize these grocery items. Return ONLY a JSON array of categories in order. Categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery, Frozen, Canned & Dry, Snacks, Beverages, Household, Personal Care, Other.\n\n${nameList}`}]);
           const cats=JSON.parse(catRaw.replace(/```json|```/g,'').trim());
-          if(Array.isArray(cats))clientParsed.items=clientParsed.items.map((it,i)=>({...it,category:cats[i]||'Other'}));
-        }catch(e){/* categories optional, don't fail */}
-        setScannedResult(clientParsed);
+          if(Array.isArray(cats))clientResult.items=clientResult.items.map((it,i)=>({...it,category:cats[i]||'Other'}));
+        }catch(e){/* categories optional */}
+        setScannedResult(clientResult);
         setScanning(false);return;
       }
-
-      // fallback: send full text to AI for unknown formats
+      // fallback to AI for unknown formats
       const raw=await aiVision({textContent:text});
       const cleaned=raw.replace(/```json|```/g,'').trim();
-      const start=cleaned.indexOf('{');const end=cleaned.lastIndexOf('}');
-      if(start===-1||end===-1)throw new Error('No JSON in response');
-      const parsed=JSON.parse(cleaned.slice(start,end+1));
-      if(!parsed.items||!Array.isArray(parsed.items)||parsed.items.length===0)throw new Error('No items found');
-      // auto-detect store if AI missed it
+      const s=cleaned.indexOf('{');const e=cleaned.lastIndexOf('}');
+      if(s===-1||e===-1)throw new Error('No JSON');
+      const parsed=JSON.parse(cleaned.slice(s,e+1));
+      if(!parsed.items?.length)throw new Error('No items');
       if(!parsed.storeName){
         const l=text.toLowerCase();
         if(l.includes('costco'))parsed.storeName='Costco';
@@ -420,13 +337,63 @@ export default function App(){
       }
       setScannedResult(parsed);
     }catch(e){
-      console.error('Scan error:',e);
-      flash("Couldn't read that receipt — try copying the full text again");
+      console.error('Text scan error:',e);
+      flash("Couldn't read that — make sure you copied the full receipt text");
     }
     setScanning(false);
   };
 
-  // ── PDF extraction via PDF.js (client-side, no backend needed) ──
+  // PDF text extraction — no external library needed
+
+  const scanPdf=async(file)=>{
+    setScanning(true);setPdfLoading(true);setScannedResult(null);
+    try{
+      // Read PDF as raw text using FileReader
+      const text=await new Promise((resolve,reject)=>{
+        const reader=new FileReader();
+        reader.onload=e=>{
+          // PDFs contain readable text mixed with binary — extract the readable parts
+          const raw=e.target.result;
+          // pull out all readable ASCII strings of length > 3
+          const strings=raw.match(/[ -~]{4,}/g)||[];
+          resolve(strings.join(' '));
+        };
+        reader.onerror=reject;
+        reader.readAsBinaryString(file);
+      });
+
+      const storeHint=file.name.toLowerCase().includes('costco')?'Costco':
+        text.toLowerCase().includes('costco')?'Costco':null;
+
+      // Try client-side Instacart parser first
+      const clientResult=parseReceiptText(text);
+      if(clientResult&&clientResult.items.length>=2){
+        if(storeHint&&!clientResult.storeName)clientResult.storeName=storeHint;
+        setScannedResult(clientResult);
+        setScanning(false);setPdfLoading(false);return;
+      }
+
+      // Send to AI with the raw text
+      setPdfLoading(false);
+      const raw=await aiVision({textContent:`PDF RECEIPT (${storeHint||'grocery store'}):\n\n${text.slice(0,12000)}`});
+      const cleaned=raw.replace(/```json|```/g,'').trim();
+      const s=cleaned.indexOf('{');const e2=cleaned.lastIndexOf('}');
+      if(s>=0&&e2>s){
+        const parsed=JSON.parse(cleaned.slice(s,e2+1));
+        if(parsed.items?.length){
+          if(storeHint&&!parsed.storeName)parsed.storeName=storeHint;
+          setScannedResult(parsed);
+          setScanning(false);setPdfLoading(false);return;
+        }
+      }
+      flash("Couldn't read this PDF — paste the receipt text in the box below");
+    }catch(e){
+      console.error('PDF error:',e);
+      flash("Couldn't read this PDF — paste the receipt text in the box below");
+    }
+    setScanning(false);setPdfLoading(false);
+  };
+
 
   // ── Purchase history summary for AI ──
   const getPurchaseContext=()=>{
@@ -786,24 +753,52 @@ Return ONLY valid JSON:
             <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".6px",color:"#9B7ED4",marginBottom:6}}>How to make it</div>
             <ol style={{paddingLeft:18,margin:"0 0 16px"}}>{plan.adventureSuggestion.steps.map((s,i)=><li key={i} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol>
           </>}
+          {/* swap picker — shown when week is full */}
+          {adventureSwapMode&&<div style={{marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".6px",color:"#9B7ED4",marginBottom:8}}>Which meal do you want to replace?</div>
+            {(plan.meals||[]).map((m,i)=><div key={i}
+              style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",border:"1.5px solid #D8C8F0",borderRadius:10,marginBottom:6,cursor:"pointer",background:"#FDFAFF"}}
+              onClick={()=>{
+                const adv=plan.adventureSuggestion;
+                const newMeal={day:m.day,name:adv.name,time:adv.time||30,
+                  ingredients:Array.isArray(adv.ingredients)?adv.ingredients:[adv.teaser||""],
+                  prep:Array.isArray(adv.prepSteps)?adv.prepSteps:[],
+                  finish:Array.isArray(adv.steps)?adv.steps:[adv.teaser||"Cook and serve"],
+                  noPrepFinish:Array.isArray(adv.steps)?adv.steps:[],shared:[]};
+                const updated=[...(plan.meals||[])];
+                updated[i]=newMeal;
+                sPl({...plan,meals:updated});
+                setAdventureSwapMode(false);setAdventureExpanded(false);
+                flash(`${m.day} swapped to ${adv.name}!`);
+              }}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{m.day}</div>
+                <div style={{fontSize:12,color:"var(--i3)"}}>{m.name}</div>
+              </div>
+              <span style={{fontSize:12,color:"#9B7ED4",fontWeight:700}}>Replace →</span>
+            </div>)}
+            <button className="btn bo bsm" style={{width:"100%",marginTop:4,borderColor:"#D8C8F0",color:"#9B7ED4",fontSize:12}} onClick={()=>setAdventureSwapMode(false)}>Cancel</button>
+          </div>}
           <div style={{display:"flex",gap:8}}>
             <button className="btn bg" style={{flex:1,padding:"11px 16px",fontSize:13,background:"#7C5AB8"}} onClick={()=>{
               const adv=plan.adventureSuggestion;
               const currentMeals=plan.meals||[];
-              // check if already added
               if(currentMeals.some(m=>m.name===adv.name)){flash("Already in this week's plan!");return;}
-              // pick first day in DAYS order that isn't used
               const usedDays=currentMeals.map(m=>m.day);
-              const targetDay=DAYS.find(d=>!usedDays.includes(d));
-              if(!targetDay){flash("All 7 days are already planned!");return;}
-              const newMeal={day:targetDay,name:adv.name,time:adv.time||30,
-                ingredients:Array.isArray(adv.ingredients)?adv.ingredients:[adv.teaser||""],
-                prep:Array.isArray(adv.prepSteps)?adv.prepSteps:[],
-                finish:Array.isArray(adv.steps)?adv.steps:[adv.teaser||"Cook and serve"],
-                noPrepFinish:Array.isArray(adv.steps)?adv.steps:[],shared:[]};
-              sPl({...plan,meals:[...currentMeals,newMeal]});
-              setAdventureExpanded(false);
-              flash(`${adv.name} added to ${targetDay}!`);
+              const freeDay=DAYS.find(d=>!usedDays.includes(d));
+              if(freeDay){
+                const newMeal={day:freeDay,name:adv.name,time:adv.time||30,
+                  ingredients:Array.isArray(adv.ingredients)?adv.ingredients:[adv.teaser||""],
+                  prep:Array.isArray(adv.prepSteps)?adv.prepSteps:[],
+                  finish:Array.isArray(adv.steps)?adv.steps:[adv.teaser||"Cook and serve"],
+                  noPrepFinish:Array.isArray(adv.steps)?adv.steps:[],shared:[]};
+                sPl({...plan,meals:[...currentMeals,newMeal]});
+                setAdventureExpanded(false);
+                flash(`${adv.name} added to ${freeDay}!`);
+              } else {
+                // week is full — show swap picker
+                setAdventureSwapMode(true);
+              }
             }}>+ Add to This Week</button>
             <button className="btn bo bsm" style={{fontSize:13,borderColor:"#D8C8F0",color:"#7C5AB8",whiteSpace:"nowrap"}} onClick={()=>{
               const adv=plan.adventureSuggestion;
