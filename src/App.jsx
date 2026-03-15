@@ -270,8 +270,6 @@ export default function App(){
   const parseReceiptText=(text)=>{
     const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
     const lower=text.toLowerCase();
-
-    // detect store
     let storeName=null;
     if(lower.includes('costco'))storeName='Costco';
     else if(lower.includes('wegmans'))storeName='Wegmans';
@@ -280,18 +278,12 @@ export default function App(){
     else if(lower.includes('target'))storeName='Target';
     else if(lower.includes('walmart'))storeName='Walmart';
     else if(lower.includes('amazon fresh'))storeName='Amazon Fresh';
-
-    // detect total
     let total=null;
     const totalMatch=text.match(/Total[:\s]+\$?([\d,]+\.\d{2})/i);
     if(totalMatch)total='$'+totalMatch[1];
-
-    // detect date
     let date=null;
     const dateMatch=text.match(/(\d{4}-\d{2}-\d{2})|(\w+ \d{1,2},? \d{4})|(\d{1,2}\/\d{1,2}\/\d{2,4})/);
     if(dateMatch){try{const d=new Date(dateMatch[0]);if(!isNaN(d))date=d.toISOString().split('T')[0];}catch{}}
-
-    // ── Instacart format: "Nx Product Name" ──
     const instacartPattern=/^(\d+)\s+x\s+(.{8,})$/;
     const instacartItems=[];
     for(let i=0;i<lines.length;i++){
@@ -299,9 +291,7 @@ export default function App(){
       if(!m)continue;
       const qty=parseInt(m[1]);
       const name=m[2].trim();
-      // name must contain a real word (not just "8 oz" or "0.35 oz")
       if(!/[a-zA-Z]{3,}/.test(name))continue;
-      // find the actual paid price in next 8 lines (skip ~~ strikethrough, Item codes, ✓ lines)
       let price=null;
       for(let j=i+1;j<Math.min(i+9,lines.length);j++){
         const l=lines[j];
@@ -312,12 +302,90 @@ export default function App(){
       instacartItems.push({name,quantity:qty,price,category:'Other'});
     }
     if(instacartItems.length>=2)return{storeName,date,total,items:instacartItems,_parsed:true};
-
-    // ── Generic format: return null so AI handles it ──
     return null;
   };
 
-  const scanTextContent=async()=>{
+  // ── PDF: render pages as images → vision API (most reliable approach) ────
+  const loadPdfJs=()=>new Promise((resolve,reject)=>{
+    if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
+    const script=document.createElement('script');
+    script.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.onload=()=>{
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve(window.pdfjsLib);
+    };
+    script.onerror=()=>reject(new Error('PDF.js failed to load'));
+    document.head.appendChild(script);
+  });
+
+  const scanPdf=async(file)=>{
+    setScanning(true);setPdfLoading(true);setScannedResult(null);
+    try{
+      const pdfjsLib=await loadPdfJs();
+      const arrayBuffer=await file.arrayBuffer();
+      const pdf=await pdfjsLib.getDocument({data:new Uint8Array(arrayBuffer)}).promise;
+      const totalPages=Math.min(pdf.numPages,5);
+      let allItems=[];
+      let detectedStore=file.name.toLowerCase().includes('costco')?'Costco':null;
+      let detectedDate=null;
+      let detectedTotal=null;
+
+      for(let pageNum=1;pageNum<=totalPages;pageNum++){
+        const page=await pdf.getPage(pageNum);
+        // render at scale 2 for crisp text
+        const viewport=page.getViewport({scale:2});
+        const canvas=document.createElement('canvas');
+        canvas.width=viewport.width;
+        canvas.height=viewport.height;
+        await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+
+        // split tall pages into 1200px chunks so vision API can read each section
+        const CHUNK=1200;
+        const chunks=Math.ceil(canvas.height/CHUNK);
+        for(let c=0;c<chunks;c++){
+          const sliceH=Math.min(CHUNK,canvas.height-c*CHUNK);
+          if(sliceH<50)continue;
+          const slice=document.createElement('canvas');
+          slice.width=canvas.width;slice.height=sliceH;
+          slice.getContext('2d').drawImage(canvas,0,c*CHUNK,canvas.width,sliceH,0,0,canvas.width,sliceH);
+          const b64=slice.toDataURL('image/jpeg',0.9).split(',')[1];
+          if(!b64||b64.length<200)continue;
+          try{
+            const t=await aiVision({
+              imageBase64:b64,
+              mimeType:'image/jpeg',
+              prompt:`This is part of a grocery receipt. Extract every purchased item shown. Each item line looks like "1 x Product Name $price". Skip Item codes, strikethrough prices, tip, subtotal, and total lines. Return ONLY valid JSON: {"storeName":"store or null","date":"YYYY-MM-DD or null","total":"$amount or null","items":[{"name":"full product name","quantity":1,"price":"$amount or null","category":"Produce|Meat & Seafood|Dairy & Eggs|Bakery|Frozen|Canned & Dry|Snacks|Beverages|Household|Personal Care|Other"}]}`
+            });
+            const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
+            if(parsed.storeName&&!detectedStore)detectedStore=parsed.storeName;
+            if(parsed.date&&!detectedDate)detectedDate=parsed.date;
+            if(parsed.total&&!detectedTotal)detectedTotal=parsed.total;
+            if(parsed.items?.length)allItems=[...allItems,...parsed.items];
+          }catch(e){console.warn('chunk failed:',e);}
+        }
+      }
+
+      // deduplicate by name
+      const seen=new Set();
+      allItems=allItems.filter(it=>{
+        const k=(it.name||'').toLowerCase().trim();
+        if(!k||k.length<3||seen.has(k))return false;
+        seen.add(k);return true;
+      });
+
+      if(!allItems.length){
+        flash("Couldn't read this PDF — try pasting the email text in the text box below");
+        setScanning(false);setPdfLoading(false);return;
+      }
+      setScannedResult({storeName:detectedStore||'Unknown Store',date:detectedDate,total:detectedTotal,items:allItems});
+    }catch(e){
+      console.error('PDF error:',e);
+      flash("PDF failed — paste the receipt text in the box below instead");
+    }
+    setScanning(false);setPdfLoading(false);
+  };
+
+    const scanTextContent=async()=>{
     if(!scanText.trim())return;
     setScanning(true);setScannedResult(null);
     try{
@@ -359,144 +427,6 @@ export default function App(){
   };
 
   // ── PDF extraction via PDF.js (client-side, no backend needed) ──
-  const loadPdfJs=()=>new Promise((resolve,reject)=>{
-    if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
-    const script=document.createElement('script');
-    script.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    script.onload=()=>{
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      resolve(window.pdfjsLib);
-    };
-    script.onerror=()=>reject(new Error('PDF.js failed to load'));
-    document.head.appendChild(script);
-  });
-
-  // split a tall canvas into chunks so vision API can read each section clearly
-  const canvasToChunks=async(canvas,store,pageNum)=>{
-    const CHUNK_H=1400; // px — fits comfortably in vision API
-    const chunks=Math.ceil(canvas.height/CHUNK_H);
-    const results=[];
-    for(let c=0;c<chunks;c++){
-      const h=Math.min(CHUNK_H,canvas.height-c*CHUNK_H);
-      if(h<=0)break;
-      const slice=document.createElement('canvas');
-      slice.width=canvas.width;slice.height=h;
-      const sCtx=slice.getContext('2d');
-      sCtx.drawImage(canvas,0,c*CHUNK_H,canvas.width,h,0,0,canvas.width,h);
-      const base64=slice.toDataURL('image/jpeg',0.88).split(',')[1];
-      if(!base64||base64.length<100)continue;
-      try{
-        const t=await aiVision({imageBase64:base64,mimeType:'image/jpeg',
-          prompt:`Grocery/store receipt section (page ${pageNum}, chunk ${c+1} of ${chunks}). Extract every line item — food, household, snacks, everything. Expand abbreviations. Skip tax, subtotal, and payment lines. Return ONLY valid JSON: {"storeName":"name or null","date":"YYYY-MM-DD or null","total":"dollar amount or null","items":[{"name":"readable name","quantity":1,"price":"dollar or null","category":"Produce|Meat & Seafood|Dairy & Eggs|Bakery|Frozen|Canned & Dry|Snacks|Beverages|Household|Personal Care|Other"}]}`});
-        const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
-        results.push(parsed);
-      }catch(e){console.warn(`Chunk ${c+1} failed:`,e);}
-    }
-    return results;
-  };
-
-  const scanPdf=async(file)=>{
-    setScanning(true);setPdfLoading(true);setScannedResult(null);
-    try{
-      const nameLower=file.name.toLowerCase();
-      const storeHint=nameLower.includes('costco')?'Costco':nameLower.includes('sams')?"Sam's Club":null;
-
-      const pdfjsLib=await loadPdfJs();
-      const arrayBuffer=await file.arrayBuffer();
-      const pdf=await pdfjsLib.getDocument({data:new Uint8Array(arrayBuffer)}).promise;
-
-      // ── Strategy 1: text extraction ───────────────────────────────────────
-      let fullText='';
-      try{
-        for(let i=1;i<=pdf.numPages;i++){
-          const page=await pdf.getPage(i);
-          const tc=await page.getTextContent();
-          // sort top-to-bottom, left-to-right
-          const sorted=[...tc.items].sort((a,b)=>b.transform[5]-a.transform[5]||a.transform[4]-b.transform[4]);
-          let prevY=null;let line='';
-          for(const item of sorted){
-            const y=Math.round(item.transform[5]);
-            if(prevY!==null&&Math.abs(y-prevY)>3){fullText+=line.trim()+'\n';line='';}
-            line+=(item.str||'')+' ';prevY=y;
-          }
-          if(line.trim())fullText+=line.trim()+'\n';
-        }
-      }catch(e){console.warn('Text extract failed:',e);}
-
-      const storeFromText=fullText.toLowerCase().includes('costco')?'Costco':
-                          fullText.toLowerCase().includes("sam's club")?"Sam's Club":null;
-      const store=storeHint||storeFromText;
-
-      if(fullText.replace(/\s/g,'').length>200){
-        setPdfLoading(false);
-        const t=await aiVision({textContent:`RECEIPT (${store||'store'}):\n\n${fullText.slice(0,12000)}`});
-        const parsed=JSON.parse(t.replace(/```json|```/g,'').trim());
-        if(store&&!parsed.storeName)parsed.storeName=store;
-        setScannedResult(parsed);
-        setScanning(false);setPdfLoading(false);return;
-      }
-
-      // ── Strategy 2: render → chunk → vision ───────────────────────────────
-      // Handles Safari "Export as PDF", image-based PDFs, any format
-      setPdfLoading(false);
-      let allResults=[];
-      const pagesToScan=Math.min(pdf.numPages,4);
-      for(let i=1;i<=pagesToScan;i++){
-        try{
-          const page=await pdf.getPage(i);
-          // use scale 2 for sharp text; chunking handles the height
-          const viewport=page.getViewport({scale:2.0});
-          const canvas=document.createElement('canvas');
-          canvas.width=viewport.width;canvas.height=viewport.height;
-          await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
-          const chunks=await canvasToChunks(canvas,store,i);
-          allResults=[...allResults,...chunks];
-        }catch(e){console.warn(`Page ${i} render failed:`,e);}
-      }
-
-      // merge all chunk results
-      let allItems=[];let detectedStore=store;let detectedDate=null;let detectedTotal=null;
-      for(const r of allResults){
-        if(r.storeName&&!detectedStore)detectedStore=r.storeName;
-        if(r.date&&!detectedDate)detectedDate=r.date;
-        if(r.total&&!detectedTotal)detectedTotal=r.total;
-        if(r.items?.length)allItems=[...allItems,...r.items];
-      }
-
-      // deduplicate by name
-      const seen=new Set();
-      allItems=allItems.filter(item=>{
-        const k=(item.name||'').toLowerCase().trim();
-        if(!k||seen.has(k))return false;
-        seen.add(k);return true;
-      });
-
-      if(!allItems.length){
-        flash("Couldn't read this PDF — try the 📷 Photo tab instead");
-        setScanning(false);setPdfLoading(false);return;
-      }
-      setScannedResult({storeName:detectedStore||'Unknown Store',date:detectedDate,total:detectedTotal,items:allItems});
-    }catch(e){
-      console.error('PDF scan error:',e);
-      flash("Couldn't read this PDF — try the 📷 Photo tab instead");
-    }
-    setScanning(false);setPdfLoading(false);
-  };
-
-    const savePurchase=(result,store)=>{
-    const purchase={
-      id:"p"+Date.now(),
-      date:result.date||new Date().toISOString().split("T")[0],
-      storeName:store||result.storeName||"Unknown Store",
-      total:result.total||null,
-      items:result.items||[],
-    };
-    const updated=[purchase,...purchases].slice(0,50);
-    sPh(updated);
-    setScannedResult(null);setScanText("");
-    flash(`Saved ${purchase.items.length} items from ${purchase.storeName}`);
-    setModal(null);
-  };
 
   // ── Purchase history summary for AI ──
   const getPurchaseContext=()=>{
@@ -859,15 +789,19 @@ Return ONLY valid JSON:
           <div style={{display:"flex",gap:8}}>
             <button className="btn bg" style={{flex:1,padding:"11px 16px",fontSize:13,background:"#7C5AB8"}} onClick={()=>{
               const adv=plan.adventureSuggestion;
-              const usedDays=plan.meals?.map(m=>m.day)||[];
-              const freeDays=DAYS.filter(d=>!usedDays.includes(d));
-              const targetDay=freeDays[0]||DAYS[0];
+              const currentMeals=plan.meals||[];
+              // check if already added
+              if(currentMeals.some(m=>m.name===adv.name)){flash("Already in this week's plan!");return;}
+              // pick first day in DAYS order that isn't used
+              const usedDays=currentMeals.map(m=>m.day);
+              const targetDay=DAYS.find(d=>!usedDays.includes(d));
+              if(!targetDay){flash("All 7 days are already planned!");return;}
               const newMeal={day:targetDay,name:adv.name,time:adv.time||30,
                 ingredients:Array.isArray(adv.ingredients)?adv.ingredients:[adv.teaser||""],
                 prep:Array.isArray(adv.prepSteps)?adv.prepSteps:[],
                 finish:Array.isArray(adv.steps)?adv.steps:[adv.teaser||"Cook and serve"],
                 noPrepFinish:Array.isArray(adv.steps)?adv.steps:[],shared:[]};
-              sPl({...plan,meals:[...(plan.meals||[]),newMeal]});
+              sPl({...plan,meals:[...currentMeals,newMeal]});
               setAdventureExpanded(false);
               flash(`${adv.name} added to ${targetDay}!`);
             }}>+ Add to This Week</button>
