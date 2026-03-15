@@ -85,21 +85,32 @@ Be thorough — capture every line item. Normalize item names (e.g. "ORG WHOLE M
         userContent = [
           {
             type: "text",
-            text: `You are reading a grocery receipt, order confirmation, or PDF receipt. Extract every purchased item.
-If this is a Costco or warehouse receipt, expand all abbreviations to readable product names.
-Text:
+            text: `Extract every purchased grocery item from the following receipt or order confirmation text.
+
+PARSING RULES:
+- This may be an Instacart delivery order, Costco order, grocery store receipt, or email confirmation
+- Instacart format: items appear as "Nx ProductName, size\nItem XXXXXX\nsize/unit\n$price" — the quantity is the number before "x", the price is the dollar amount WITHOUT strikethrough (the actual paid price)
+- Ignore: Item codes (e.g. "Item 1234567"), strikethrough prices (these are original prices, not paid), tip lines, subtotal lines, delivery fee lines, membership credit lines, "Items Subtotal", "Total" summary lines
+- For quantity: "3 x Kirkland Milk" means quantity 3
+- For price: use the LOWER price when both a sale price and original price appear
+- Store name: look for "Costco", "Wegmans", "Whole Foods", etc. in the text. If Instacart is delivering from Costco, storeName is "Costco"
+- Detect date from any date strings in the text
+
+TEXT:
 ${textContent}
 
-Return ONLY valid JSON:
+Return ONLY valid JSON, nothing else:
 {
-  "storeName": "detected store name or null",
+  "storeName": "Costco",
   "date": "YYYY-MM-DD or null",
-  "total": "dollar amount string or null",
+  "total": "dollar amount of final total or null",
   "items": [
-    { "name": "full readable item name", "quantity": 1, "price": "dollar amount or null", "category": "one of: Produce, Meat & Seafood, Dairy & Eggs, Bakery, Frozen, Canned & Dry, Snacks, Beverages, Household, Personal Care, Other" }
+    { "name": "Mama Mancini's Jumbo Beef Meatballs 48oz", "quantity": 1, "price": "$10.99", "category": "Meat & Seafood" },
+    { "name": "Kirkland Signature Whole Milk 1 gal", "quantity": 3, "price": "$12.45", "category": "Dairy & Eggs" }
   ]
 }
-Be thorough — include every line item. Normalize all abbreviated names to plain English. Skip tax lines, subtotals, and payment method lines.`,
+
+Categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery, Frozen, Canned & Dry, Snacks, Beverages, Household, Personal Care, Other`,
           },
         ];
       } else {
