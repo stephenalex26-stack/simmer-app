@@ -37,6 +37,7 @@ heart:<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="curren
 heartOn:<svg width="18" height="18" viewBox="0 0 24 24" fill="#e25555" stroke="#e25555" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>,
 up:<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>,
 down:<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z"/><path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg>,
+gear:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
 };
 
 /* ── CSS ── */
@@ -249,6 +250,8 @@ CRITICAL FORMATTING RULES:
 - "finish" must be an ARRAY of SHORT steps: ["Preheat oven to 400°F", "Spread on sheet pan", "Bake 20 minutes"]
 - "prepGuide.steps" must be SHORT individual steps — ONE task per step, never combine multiple recipes in one step
 - Each prep step should be 1 sentence max, like: "Cook 6 cups rice in rice cooker"
+- "prepGuide.summary" is a short list of what you'll have ready after prep
+- Each meal needs "noPrepFinish" — full instructions for cooking from scratch if prep day was skipped
 - For NEW recipes you suggest, include complete ingredients and instructions
 
 Return valid JSON:
@@ -257,8 +260,9 @@ Return valid JSON:
 "ingredients":["1 lb ground beef","1 onion (diced)","3 garlic cloves"],
 "prep":["Brown beef 5 min","Add diced onion, cook 3 min","Stir in sauce, simmer 10 min","Cool and refrigerate"],
 "finish":["Reheat sauce over medium heat","Boil pasta 8 min","Toss and serve with parmesan"],
+"noPrepFinish":["Dice 1 onion and mince 3 garlic cloves","Brown 1 lb beef in large pot 5 min","Add onion 3 min, garlic 1 min","Stir in 28oz crushed tomatoes + 2 tbsp paste + seasoning","Simmer 15 min while pasta boils","Toss and serve with parmesan"],
 "shared":["rice","bell peppers"]}],
-"prepGuide":{"minutes":75,"steps":["Cook 6 cups rice in rice cooker","Slice 3 bell peppers into strips","Dice 2 onions","Season and marinate chicken with 2 tbsp oil + fajita seasoning","Brown 1 lb ground beef, drain fat","Make teriyaki glaze: whisk soy sauce + honey + vinegar","Cool and store everything in labeled containers"]},
+"prepGuide":{"minutes":75,"summary":["Marinated chicken for Monday fajitas","Cooked 6 cups rice for Tue + Thu","Teriyaki glaze for Wednesday","Browned beef + sauce for Friday"],"steps":["Cook 6 cups rice in rice cooker","Slice 3 bell peppers into strips","Dice 2 onions","Season and marinate chicken with 2 tbsp oil + fajita seasoning","Brown 1 lb ground beef, drain fat","Make teriyaki glaze: whisk soy sauce + honey + vinegar","Cool and store everything in labeled containers"]},
 "shoppingList":{"Vegetables":["3 bell peppers (Mon + Wed)","2 onions"],"Fruits":[],"Meat & Seafood":["1.5 lb chicken thighs","1 lb ground beef"],"Dairy & Eggs":["1/2 cup parmesan"],"Herbs & Spices":["fresh cilantro","cumin"],"Grains & Pasta":["1 lb spaghetti","6 cups rice"],"Canned & Dry":["28oz crushed tomatoes","2 cans black beans"],"Condiments & Oils":["soy sauce","fajita seasoning"],"Frozen":[],"Bakery & Bread":["8 flour tortillas"],"Other":[]},
 "reused":{"bell peppers":["Fajitas","Stir-Fry"],"rice":["Stir-Fry","Taco Bowls"]},
 "supplyReminders":[]}`}]);
@@ -288,7 +292,10 @@ Return valid JSON:
 
   {/* ── HOME ── */}
   {tab==="home"&&<>
-    <h1 className="pg-t" style={{marginBottom:16}}>Hey there 🍲</h1>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <h1 className="pg-t">Hey there 🍲</h1>
+      <button className="ib" onClick={()=>setTab("settings")} title="Settings">{I.gear}</button>
+    </div>
 
     {/* Tonight's dinner — hero card */}
     {todayMeal?(<div className="tonight">
@@ -351,7 +358,7 @@ Return valid JSON:
 
       {plan.reused&&Object.keys(plan.reused).length>0&&<div style={{marginBottom:14}}><span style={{fontSize:12,fontWeight:700,color:"var(--i3)"}}>SHARED: </span>{Object.entries(plan.reused).map(([k,v])=><span key={k} className="sp">{k} ×{v.length}</span>)}</div>}
 
-      {plan.prepGuide&&<div className="prb"><div className="prb-t">🔪 {(prefs.prepDays||["Sunday"]).join(" & ")} Prep — ~{plan.prepGuide.minutes} min</div><ol>{plan.prepGuide.steps.map((s,i)=><li key={i}>{s}</li>)}</ol></div>}
+      {plan.prepGuide&&<div className="prb"><div className="prb-t">🔪 {(prefs.prepDays||["Sunday"]).join(" & ")} Prep — ~{plan.prepGuide.minutes} min</div>{plan.prepGuide.summary&&<div style={{marginBottom:12,padding:"10px 14px",background:"rgba(255,255,255,.6)",borderRadius:10}}><div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",color:"var(--sa)",marginBottom:6}}>After prep you'll have</div>{fmt(plan.prepGuide.summary).map((s,i)=><div key={i} style={{fontSize:13,color:"#2B5E3B",padding:"2px 0",paddingLeft:16,position:"relative"}}><span style={{position:"absolute",left:0}}>✓</span>{s}</div>)}</div>}<ol>{plan.prepGuide.steps.map((s,i)=><li key={i}>{s}</li>)}</ol></div>}
 
       {plan.meals?.map((m,i)=><div className="dc" key={i}>
         <div className="dc-top" onClick={()=>setExpanded(e=>({...e,[i]:!e[i]}))}>
@@ -362,6 +369,7 @@ Return valid JSON:
           {m.ingredients&&<><div className="dc-lb">Ingredients</div><ul style={{listStyle:"none",padding:0,margin:0}}>{(Array.isArray(m.ingredients)?m.ingredients:m.ingredients.split(/,\s*/)).map((g,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",paddingLeft:16,position:"relative"}}><span style={{position:"absolute",left:0,color:"var(--i4)"}}>•</span>{g.trim()}</li>)}</ul></>}
           <div className="dc-lb">Prep (done ahead)</div><ol style={{paddingLeft:20,margin:0}}>{fmt(m.prep).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol>
           <div className="dc-lb">Tonight</div><ol style={{paddingLeft:20,margin:0}}>{fmt(m.finish).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol>
+          {m.noPrepFinish&&<details style={{marginTop:8}}><summary style={{fontSize:12,color:"var(--ru)",fontWeight:600,cursor:"pointer"}}>Didn't get to prep? Full instructions here</summary><ol style={{paddingLeft:20,margin:"8px 0 0"}}>{fmt(m.noPrepFinish).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></details>}
           {m.shared?.length>0&&<><div className="dc-lb">Shared ingredients</div><div>{m.shared.map((s,j)=><span key={j} className="sp">{s}</span>)}</div></>}
           <div className="rate-row">
             <button className={`rate-btn ${ratings[m.name]==="loved"?"loved":""}`} onClick={e=>{e.stopPropagation();rateMeal(m.name,"loved")}}>{I.up} Loved it</button>
@@ -496,9 +504,9 @@ Return valid JSON:
   <nav className="bnav">{[
     {id:"home",label:"Home",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>},
     {id:"plan",label:"Plan",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>},
+    {id:"shop",label:"Shop",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>},
     {id:"recipes",label:"Recipes",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>},
     {id:"restock",label:"Restock",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>},
-    {id:"settings",label:"Settings",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>},
   ].map(t=><button key={t.id} className={`nb ${tab===t.id?"on":""}`} onClick={()=>setTab(t.id)}><div style={{width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center"}}>{t.icon}</div>{t.label}</button>)}</nav>
 
   {/* ── MODALS ── */}
