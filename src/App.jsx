@@ -29,7 +29,7 @@ const RECIPES=[
 const SUPPLIES=[
 {id:"s1",name:"Paper Towels",where:"Costco",weeks:4,last:null},{id:"s2",name:"Toilet Paper",where:"Costco",weeks:5,last:null},{id:"s3",name:"Trash Bags",where:"Costco",weeks:6,last:null},{id:"s4",name:"Dishwasher Pods",where:"Costco",weeks:5,last:null},{id:"s5",name:"Goldfish Crackers",where:"Costco",weeks:3,last:null},{id:"s6",name:"Granola Bars",where:"Costco",weeks:3,last:null},{id:"s7",name:"String Cheese",where:"Costco",weeks:2,last:null},{id:"s8",name:"Laundry Detergent",where:"Costco",weeks:8,last:null},
 ];
-const DEF_PREFS={meals:5,time:30,prepDays:["Sunday"],adults:2,kids:3,diet:"",proteinPriority:"medium",maxPastaPerWeek:2,maxRedMeatPerWeek:2,stores:["Wegmans","Costco"],cuisines:[]};
+const DEF_PREFS={meals:5,time:30,prepDays:["Sunday"],adults:2,kids:3,diet:"",proteinPriority:"medium",maxPastaPerWeek:2,maxRedMeatPerWeek:2,stores:["Wegmans","Costco"],cuisines:[],weeklyBudget:""};
 
 /* ── icons ── */
 const I={
@@ -185,6 +185,7 @@ export default function App(){
   const[adventureLoading,setAdventureLoading]=useState(false);
   const[adventureSwapMode,setAdventureSwapMode]=useState(false);
   const[scanStore,setScanStore]=useState("");
+  const[useUpIngredients,setUseUpIngredients]=useState("");
   const[undoSupply,setUndoSupply]=useState(null); // {id, prevDate}
   const fileRef=useRef();
 
@@ -503,6 +504,8 @@ export default function App(){
       if(allNames.match(/pasta|bolognese|pesto|italian|parmesan/))cuisineHints.push("Italian");
       if(allNames.match(/salmon|fish|shrimp/))cuisineHints.push("Seafood");
     }
+    const useUpNote=useUpIngredients.trim()?`\nUSE THESE UP THIS WEEK (high priority — build meals around these ingredients): ${useUpIngredients.trim()}`:"";
+    const budgetNote=prefs.weeklyBudget?`\nWEEKLY GROCERY BUDGET: $${prefs.weeklyBudget}. Keep the total shopping list cost under this amount. Show estimated cost vs budget in the "cost" field like "$85 of $120 budget".`:"";
     const seed=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
     try{
       const t=await ai([{role:"user",content:`Plan ${prefs.meals} dinners. Seed:${seed}
@@ -518,7 +521,7 @@ ${favs.length?`FAVORITES: ${favs.join(", ")}`:""}\
 ${loved.length?`\nFAMILY LOVED: ${loved.join(", ")}`:""}\
 ${skip.length?`\nAVOID: ${skip.join(", ")}`:""}\
 ${cuisineHints.length?`\nFAMILY LIKES: ${cuisineHints.join(", ")} cuisine`:""}\
-${prevNote}${pantryNote}${histNote}${purchaseNote}${storeNote}
+${prevNote}${pantryNote}${histNote}${purchaseNote}${storeNote}${useUpNote}${budgetNote}
 ${sb}
 
 USER'S SAVED RECIPES — when using these, copy the EXACT ingredients and amounts as written. Do not invent new amounts or simplify them:
@@ -823,6 +826,11 @@ Return ONLY valid JSON:
     {planView==="this"&&<>
       <p className="pg-s">{plan?plan.title:"No plan yet — generate one below"}</p>
       {error&&<div className="err-bar">{error}</div>}
+      <div className="cd" style={{marginBottom:12}}>
+        <label className="fl">Use up these ingredients <small>(optional)</small></label>
+        <input className="fi" value={useUpIngredients} onChange={e=>setUseUpIngredients(e.target.value)} placeholder="e.g. bell peppers, chicken thighs, spinach..."/>
+        <p style={{fontSize:11,color:"var(--i3)",marginTop:4}}>AI will prioritize meals using these ingredients</p>
+      </div>
       <button className="btn bg" style={{marginBottom:16}} onClick={()=>generate("this")} disabled={loading}>{loading?<><div className="dots" style={{padding:0}}><span/><span/><span/></div> Planning...</>:plan?<>{I.refresh} Regenerate</>:<>{I.spark} Plan This Week</>}</button>
     </>}
 
@@ -830,6 +838,11 @@ Return ONLY valid JSON:
       <p className="pg-s">{nextPlan?nextPlan.title:"Plan ahead — we'll use what you already have"}</p>
       {error&&<div className="err-bar">{error}</div>}
       {!nextPlan&&purchases.length>0&&<div className="nudge nudge-sa"><b>🛒</b><span>We'll check your recent purchases and skip ingredients you likely still have.</span></div>}
+      <div className="cd" style={{marginBottom:12}}>
+        <label className="fl">Use up these ingredients <small>(optional)</small></label>
+        <input className="fi" value={useUpIngredients} onChange={e=>setUseUpIngredients(e.target.value)} placeholder="e.g. bell peppers, chicken thighs, spinach..."/>
+        <p style={{fontSize:11,color:"var(--i3)",marginTop:4}}>AI will prioritize meals using these ingredients</p>
+      </div>
       <button className="btn bg" style={{marginBottom:16}} onClick={()=>generate("next")} disabled={loading}>{loading?<><div className="dots" style={{padding:0}}><span/><span/><span/></div> Planning...</>:nextPlan?<>{I.refresh} Regenerate Next Week</>:<>{I.spark} Plan Next Week</>}</button>
     </>}
 
@@ -1103,7 +1116,8 @@ Return ONLY valid JSON:
     <div className="cd" style={{marginBottom:14}}>
       <label className="fl">Add a recipe</label>
       <textarea className="fta" style={{minHeight:60,marginBottom:8}} value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste a recipe URL or the full recipe text..."/>
-      <button className="btn bg" disabled={!importText.trim()||importing} onClick={importRecipe}>{importing?"Reading recipe...":importText.trim()&&/^https?:\/\//i.test(importText.trim())?"Import from Link":"Add This Recipe"}</button>
+      {importText.trim()&&/instagram\.com/i.test(importText.trim())&&<div className="nudge nudge-am" style={{marginBottom:8}}><b>📸</b><span>Instagram blocks direct recipe imports. Instead, copy the recipe text from the post caption and paste it here — we'll format it for you!</span></div>}
+      <button className="btn bg" disabled={!importText.trim()||importing||/instagram\.com/i.test(importText.trim())} onClick={importRecipe}>{importing?"Reading recipe...":importText.trim()&&/^https?:\/\//i.test(importText.trim())&&!/instagram\.com/i.test(importText.trim())?"Import from Link":"Add This Recipe"}</button>
     </div>
     <button className="btn bo" style={{marginBottom:14,width:"100%"}} onClick={()=>setModal({type:"recipe"})}>{I.plus} Type it in manually</button>
     {recipes.map(r=><div className="rc" key={r.id}>
@@ -1115,7 +1129,12 @@ Return ONLY valid JSON:
         <div style={{display:"flex",gap:2}}><button className="ib" onClick={()=>setModal({type:"recipe",data:r})}>{I.edit}</button><button className="ib dng" onClick={()=>{sR(recipes.filter(x=>x.id!==r.id));flash("Removed")}}>{I.trash}</button></div>
       </div>
       <div style={{cursor:"pointer",padding:"8px 0 0",fontSize:12,color:"var(--i3)",fontWeight:600}} onClick={()=>setRecExp(e=>({...e,[r.id]:!e[r.id]}))}>{recExp[r.id]?"Hide details ▲":"View details ▼"}</div>
-      {recExp[r.id]&&<div className="rx"><div className="rx-lb">Ingredients</div><ul style={{listStyle:"none",padding:0,margin:0}}>{(r.ingredients||"").split(/,\s*|\n/).filter(g=>g.trim()).map((g,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",paddingLeft:16,position:"relative"}}><span style={{position:"absolute",left:0,color:"var(--i4)"}}>•</span>{g.trim()}</li>)}</ul>{r.prep&&<><div className="rx-lb">Prep Ahead</div><ol style={{paddingLeft:20,margin:0}}>{fmt(r.prep).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></>}{r.finish&&<><div className="rx-lb">Day-of</div><ol style={{paddingLeft:20,margin:0}}>{fmt(r.finish).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></>}</div>}
+      {recExp[r.id]&&<div className="rx"><div className="rx-lb">Ingredients</div><ul style={{listStyle:"none",padding:0,margin:0}}>{(r.ingredients||"").split(/,\s*|\n/).filter(g=>g.trim()).map((g,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",paddingLeft:16,position:"relative"}}><span style={{position:"absolute",left:0,color:"var(--i4)"}}>•</span>{g.trim()}</li>)}</ul>{r.prep&&<><div className="rx-lb">Prep Ahead</div><ol style={{paddingLeft:20,margin:0}}>{fmt(r.prep).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></>}{r.finish&&<><div className="rx-lb">Day-of</div><ol style={{paddingLeft:20,margin:0}}>{fmt(r.finish).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></>}
+        <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid var(--sand)"}}>
+          <div className="rx-lb">My Notes</div>
+          <textarea className="fta" style={{minHeight:50,fontSize:13,marginTop:4}} value={r.notes||""} onChange={e=>sR(recipes.map(x=>x.id===r.id?{...x,notes:e.target.value}:x))} placeholder="Add personal tweaks — e.g. 'add extra garlic', 'kids prefer less spice'..."/>
+        </div>
+      </div>}
     </div>)}
   </>}
 
@@ -1230,6 +1249,7 @@ Return ONLY valid JSON:
         <div className="fg"><label className="fl">Max red meat/wk</label><select className="fsel" value={prefs.maxRedMeatPerWeek??2} onChange={e=>sP({...prefs,maxRedMeatPerWeek:+e.target.value})}>{[0,1,2,3,4,5].map(n=><option key={n} value={n}>{n||"None"}</option>)}</select></div>
       </div>
       <div className="fg"><label className="fl">Dietary notes</label><textarea className="fta" style={{minHeight:60}} value={prefs.diet} onChange={e=>sP({...prefs,diet:e.target.value})} placeholder="No shellfish, low carb weekdays, love Mediterranean..."/></div>
+      <div className="fg"><label className="fl">Weekly grocery budget <small>(optional)</small></label><div style={{position:"relative"}}><span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--i3)"}}>$</span><input className="fi" type="number" inputMode="decimal" style={{paddingLeft:28}} value={prefs.weeklyBudget||""} onChange={e=>sP({...prefs,weeklyBudget:e.target.value})} placeholder="e.g. 150"/></div><p style={{fontSize:11,color:"var(--i3)",marginTop:4}}>AI will keep the shopping list within this budget</p></div>
       <div className="fg">
         <label className="fl">Cuisine preferences <small>(tap to select)</small></label>
         <p style={{fontSize:12,color:"var(--i3)",marginBottom:8}}>AI will lean toward these cuisines when suggesting meals</p>
@@ -1275,7 +1295,7 @@ Return ONLY valid JSON:
   {/* Recipe modal */}
   {modal?.type==="recipe"&&<div className="ov" onClick={e=>e.target===e.currentTarget&&setModal(null)}><div className="mdl">
     <div className="mdl-hd"><h3>{modal.data?"Edit":"Add Recipe"}</h3><button className="ib" onClick={()=>setModal(null)}>{I.x}</button></div>
-    <RecipeForm r={modal.data} onSave={r=>{if(modal.data)sR(recipes.map(x=>x.id===modal.data.id?{...r,id:modal.data.id,favorite:modal.data.favorite}:x));else sR([...recipes,{...r,id:"r"+Date.now(),favorite:false}]);setModal(null);flash(modal.data?"Updated":"Added!")}}/>
+    <RecipeForm r={modal.data} onSave={r=>{if(modal.data)sR(recipes.map(x=>x.id===modal.data.id?{...r,id:modal.data.id,favorite:modal.data.favorite,notes:r.notes||modal.data.notes||""}:x));else sR([...recipes,{...r,id:"r"+Date.now(),favorite:false}]);setModal(null);flash(modal.data?"Updated":"Added!")}}/>
   </div></div>}
 
   {/* Supply modal */}
@@ -1404,7 +1424,7 @@ Return ONLY valid JSON:
 function RecipeForm({r,onSave}){
   const[n,sN]=useState(r?.name||"");const[t,sT]=useState(r?.time||25);const[sv,sSv]=useState(r?.servings||4);
   const[ig,sIg]=useState(r?.ingredients||"");const[p,sP]=useState(r?.prep||"");const[f,sF]=useState(r?.finish||"");
-  const[sr,sSr]=useState(r?.source||"");const[m,sM]=useState(!!(r?.prep||r?.finish));
+  const[sr,sSr]=useState(r?.source||"");const[m,sM]=useState(!!(r?.prep||r?.finish));const[nt,sNt]=useState(r?.notes||"");
   return<><div className="mdl-bd">
     <div className="fg"><label className="fl">What's the dish?</label><input className="fi" value={n} onChange={e=>sN(e.target.value)} placeholder="Chicken Fajitas" autoFocus/></div>
     <div className="frow"><div className="fg"><label className="fl">Time (min)</label><input className="fi" type="number" inputMode="numeric" value={t} onChange={e=>sT(e.target.value)}/></div><div className="fg"><label className="fl">Serves</label><input className="fi" type="number" inputMode="numeric" value={sv} onChange={e=>sSv(e.target.value)}/></div></div>
@@ -1412,8 +1432,9 @@ function RecipeForm({r,onSave}){
     {!m&&<button className="btn bo" style={{marginBottom:14,width:"100%"}} onClick={()=>sM(true)}>+ Add prep & cooking steps</button>}
     {m&&<><div className="fg"><label className="fl">Prep ahead</label><textarea className="fta" value={p} onChange={e=>sP(e.target.value)} placeholder="Slice veggies, marinate chicken..."/></div><div className="fg"><label className="fl">Day-of</label><textarea className="fta" value={f} onChange={e=>sF(e.target.value)} placeholder="400°F sheet pan, 20 min..."/></div></>}
     <div className="fg"><label className="fl">Source <small>(optional)</small></label><input className="fi" value={sr} onChange={e=>sSr(e.target.value)} placeholder="NYT Cooking, etc."/></div>
+    <div className="fg"><label className="fl">Notes <small>(personal tweaks)</small></label><textarea className="fta" style={{minHeight:50}} value={nt} onChange={e=>sNt(e.target.value)} placeholder="e.g. add extra garlic, kids prefer less spice..."/></div>
   </div>
-  <div className="mdl-ft"><button className="btn bg" disabled={!n.trim()} onClick={()=>onSave({name:n.trim(),time:+t||25,servings:+sv||4,ingredients:ig.trim(),prep:p.trim(),finish:f.trim(),source:sr.trim()})}>{r?"Save":"Add Recipe"}</button></div></>
+  <div className="mdl-ft"><button className="btn bg" disabled={!n.trim()} onClick={()=>onSave({name:n.trim(),time:+t||25,servings:+sv||4,ingredients:ig.trim(),prep:p.trim(),finish:f.trim(),source:sr.trim(),notes:nt.trim()})}>{r?"Save":"Add Recipe"}</button></div></>
 }
 
 function SupplyForm({s,stores,onSave,onClose}){
