@@ -23,15 +23,18 @@ const dbSave=async(table,userId,data,key)=>{
     }else if(table==="user_data"){
       await supabase.from("user_data").upsert({user_id:userId,...data,updated_at:new Date().toISOString()});
     }else if(table==="recipes"){
-      // full replace: delete all then insert
-      await supabase.from("recipes").delete().eq("user_id",userId);
-      if(data.length)await supabase.from("recipes").insert(data.map(r=>({id:r.id,user_id:userId,data:r,updated_at:new Date().toISOString()})));
+      // upsert each recipe individually, then remove stale ones
+      const ids=data.map(r=>r.id);
+      if(data.length)await supabase.from("recipes").upsert(data.map(r=>({id:r.id,user_id:userId,data:r,updated_at:new Date().toISOString()})));
+      if(ids.length)await supabase.from("recipes").delete().eq("user_id",userId).not("id","in",`(${ids.join(",")})`);
     }else if(table==="supplies"){
-      await supabase.from("supplies").delete().eq("user_id",userId);
-      if(data.length)await supabase.from("supplies").insert(data.map(s=>({id:s.id,user_id:userId,data:s,updated_at:new Date().toISOString()})));
+      const ids=data.map(s=>s.id);
+      if(data.length)await supabase.from("supplies").upsert(data.map(s=>({id:s.id,user_id:userId,data:s,updated_at:new Date().toISOString()})));
+      if(ids.length)await supabase.from("supplies").delete().eq("user_id",userId).not("id","in",`(${ids.join(",")})`);
     }else if(table==="purchases"){
-      await supabase.from("purchases").delete().eq("user_id",userId);
-      if(data.length)await supabase.from("purchases").insert(data.map(p=>({id:p.id,user_id:userId,data:p,created_at:new Date().toISOString()})));
+      const ids=data.map(p=>p.id);
+      if(data.length)await supabase.from("purchases").upsert(data.map(p=>({id:p.id,user_id:userId,data:p,created_at:new Date().toISOString()})));
+      if(ids.length)await supabase.from("purchases").delete().eq("user_id",userId).not("id","in",`(${ids.join(",")})`);
     }
   }catch(e){console.warn("Supabase save error:",table,e);}
 };
@@ -340,30 +343,39 @@ function SimmerApp({user}){
   // derived: user's stores
   const userStores=prefs.stores||["Wegmans","Costco"];
 
-  // debounced cloud save — waits 800ms after last change before syncing
-  const debouncedSave=useCallback((table,data,key)=>{
+  // refs to always have latest state for debounced saves
+  const stateRef=useRef({});
+  stateRef.current={recipes,plan,nextPlan,ratings,checked,pantry,history,supplies,purchases,prefs};
+
+  // debounced cloud save — builds data at fire time to avoid stale closures
+  const debouncedSave=useCallback((table)=>{
     if(!user?.id)return;
     if(syncTimer.current[table])clearTimeout(syncTimer.current[table]);
     syncTimer.current[table]=setTimeout(()=>{
+      const s=stateRef.current;
+      let data;
+      if(table==="recipes")data=s.recipes;
+      else if(table==="user_prefs")data=s.prefs;
+      else if(table==="plans")data={current_plan:s.plan,next_plan:s.nextPlan};
+      else if(table==="supplies")data=s.supplies;
+      else if(table==="purchases")data=s.purchases;
+      else if(table==="user_data")data={ratings:s.ratings,checked:s.checked,pantry:s.pantry,history:s.history};
+      else return;
       setSyncing(true);
-      dbSave(table,user.id,data,key).finally(()=>setSyncing(false));
+      dbSave(table,user.id,data).finally(()=>setSyncing(false));
     },800);
   },[user?.id]);
 
-  // refs to avoid stale closures in debounced saves
-  const stateRef=useRef({});
-  stateRef.current={plan,nextPlan,ratings,checked,pantry,history};
-
-  const sR=v=>{setRecipes(v);sv(LS.r,v);debouncedSave("recipes",v)};
-  const sP=v=>{setPrefs(v);sv(LS.p,v);debouncedSave("user_prefs",v)};
-  const sPl=v=>{setPlan(v);sv(LS.pl,v);debouncedSave("plans",{current_plan:v,next_plan:stateRef.current.nextPlan})};
-  const sNPl=v=>{setNextPlan(v);sv(LS.pl2,v);debouncedSave("plans",{current_plan:stateRef.current.plan,next_plan:v})};
-  const sS=v=>{setSupplies(v);sv(LS.s,v);debouncedSave("supplies",v)};
-  const sC=v=>{setChecked(v);sv(LS.ck,v);debouncedSave("user_data",{checked:v,ratings:stateRef.current.ratings,pantry:stateRef.current.pantry,history:stateRef.current.history})};
-  const sRt=v=>{setRatings(v);sv(LS.rt,v);debouncedSave("user_data",{ratings:v,checked:stateRef.current.checked,pantry:stateRef.current.pantry,history:stateRef.current.history})};
-  const sPa=v=>{setPantry(v);sv(LS.pa,v);debouncedSave("user_data",{pantry:v,ratings:stateRef.current.ratings,checked:stateRef.current.checked,history:stateRef.current.history})};
-  const sHi=v=>{setHistory(v);sv(LS.hi,v);debouncedSave("user_data",{history:v,ratings:stateRef.current.ratings,checked:stateRef.current.checked,pantry:stateRef.current.pantry})};
-  const sPh=v=>{setPurchases(v);sv(LS.ph,v);debouncedSave("purchases",v)};
+  const sR=v=>{setRecipes(v);sv(LS.r,v);debouncedSave("recipes")};
+  const sP=v=>{setPrefs(v);sv(LS.p,v);debouncedSave("user_prefs")};
+  const sPl=v=>{setPlan(v);sv(LS.pl,v);debouncedSave("plans")};
+  const sNPl=v=>{setNextPlan(v);sv(LS.pl2,v);debouncedSave("plans")};
+  const sS=v=>{setSupplies(v);sv(LS.s,v);debouncedSave("supplies")};
+  const sC=v=>{setChecked(v);sv(LS.ck,v);debouncedSave("user_data")};
+  const sRt=v=>{setRatings(v);sv(LS.rt,v);debouncedSave("user_data")};
+  const sPa=v=>{setPantry(v);sv(LS.pa,v);debouncedSave("user_data")};
+  const sHi=v=>{setHistory(v);sv(LS.hi,v);debouncedSave("user_data")};
+  const sPh=v=>{setPurchases(v);sv(LS.ph,v);debouncedSave("purchases")};
 
   // ── Load from Supabase on mount, migrate localStorage if needed ──
   useEffect(()=>{
@@ -426,6 +438,7 @@ function SimmerApp({user}){
   const activePlan=planView==="next"?nextPlan:plan;
   const setActivePlan=planView==="next"?sNPl:sPl;
   const todayMeal=plan?.meals?.find(m=>m.day===today);
+  const availableItemsMemo=getAvailableItems();
 
   // ── Store helpers ──
   const addStore=(name)=>{
@@ -790,7 +803,10 @@ Return valid JSON:
 "reused":{"rice":["Stir-Fry","Taco Bowls"]},
 "adventureSuggestion":{"name":"Chicken Larb","cuisine":"Thai","why":"Your family loves bold flavors and this is bright, herby, and totally different from anything on your usual rotation.","time":25,"teaser":"Ground chicken tossed with toasted rice, lime juice, fish sauce, and fresh herbs — served over lettuce cups.","ingredients":["1 lb ground chicken","3 tbsp fish sauce","2 tbsp lime juice","1 tbsp toasted rice powder","2 shallots sliced","fresh mint and cilantro","1 tsp chili flakes","butter lettuce cups"],"prepSteps":["Toast 2 tbsp raw rice in dry pan until golden, grind to powder"],"steps":["Cook ground chicken in pan over high heat, breaking apart, 5 min","Remove from heat, add fish sauce, lime juice, rice powder, chili","Toss with shallots, mint, cilantro","Serve in lettuce cups with extra lime"]},
 "supplyReminders":[]}`}]);
-      const parsed=JSON.parse(t.replace(/```json|```/g,"").trim());
+      let cleaned=t.replace(/```json|```/g,"").trim();
+      const jStart=cleaned.indexOf("{");const jEnd=cleaned.lastIndexOf("}");
+      if(jStart!==-1&&jEnd>jStart)cleaned=cleaned.slice(jStart,jEnd+1);
+      const parsed=JSON.parse(cleaned);
       if(isNext){sNPl(parsed);setPlanView("next");}else{sPl(parsed);sC({});setExpanded({});setSwapPicker(null);}      
       const newHist=[...history,{date:new Date().toISOString().split("T")[0],meals:parsed.meals?.map(m=>m.name)||[]}].slice(-12);
       sHi(newHist);
@@ -818,7 +834,7 @@ Rules: under 35 min, family-friendly, easy grocery ingredients, different from t
 Return ONLY valid JSON:
 {"name":"dish name","cuisine":"cuisine type","why":"one warm sentence why they'd love it","time":25,"teaser":"one vivid appetizing sentence describing the dish","ingredients":["ingredient 1","ingredient 2","ingredient 3","ingredient 4","ingredient 5","ingredient 6"],"prepSteps":["one prep step if needed"],"steps":["Step 1 with specifics","Step 2 with specifics","Step 3 with specifics","Step 4 with specifics"]}`}]);
       const parsed=JSON.parse(t.replace(/```json|```/g,"").trim());
-      sPl({...plan,adventureSuggestion:parsed});
+      setActivePlan({...activePlan,adventureSuggestion:parsed});
       setAdventureExpanded(true);
     }catch(e){flash("Couldn't fetch a new suggestion — try again");}
     setAdventureLoading(false);
@@ -827,14 +843,14 @@ Return ONLY valid JSON:
     // ── Swap meal ──
   const swapMeal=async(i,name)=>{
     setSwapping(i);
-    const day=plan.meals[i].day;
+    const day=activePlan.meals[i].day;
     const r=recipes.find(x=>x.name===name);
     try{
       const t=await ai([{role:"user",content:`Write prep + finish for "${name}" for ${day}.\nIngredients: ${r?.ingredients||"use your knowledge"}\nPrep: ${r?.prep||"n/a"}\nFinish: ${r?.finish||"n/a"}\n\nJSON only:\n{"name":"${name}","time":${r?.time||25},"prep":"detailed prep","finish":"detailed finish","shared":[]}`}]);
       const m=JSON.parse(t.replace(/```json|```/g,"").trim());
       m.day=day;
-      const nm=[...plan.meals];nm[i]=m;
-      sPl({...plan,meals:nm});setSwapPicker(null);flash(`Swapped to ${name}`);
+      const nm=[...activePlan.meals];nm[i]=m;
+      setActivePlan({...activePlan,meals:nm});setSwapPicker(null);flash(`Swapped to ${name}`);
     }catch{flash("Try again");}
     setSwapping(null)
   };
@@ -864,19 +880,19 @@ Return ONLY valid JSON:
 
     // ── Copy + Print ──
   const copyList=()=>{
-    if(!plan?.shoppingList)return;
-    let t=`🍲 ${plan.title}\n\n`;
-    Object.entries(plan.shoppingList).filter(([,v])=>v?.length).forEach(([c,its])=>{
+    if(!activePlan?.shoppingList)return;
+    let t=`🍲 ${activePlan.title}\n\n`;
+    Object.entries(activePlan.shoppingList).filter(([,v])=>v?.length).forEach(([c,its])=>{
       t+=`${c}:\n${its.map(i=>`  □ ${i}`).join("\n")}\n\n`
     });
     navigator.clipboard.writeText(t);flash("Copied!")
   };
 
   const copyByStore=()=>{
-    if(!plan?.shoppingList)return;
-    const storeMap=plan.storeMap||{};
+    if(!activePlan?.shoppingList)return;
+    const storeMap=activePlan.storeMap||{};
     const byStore={};
-    Object.entries(plan.shoppingList).filter(([,v])=>v?.length).forEach(([cat,its])=>{
+    Object.entries(activePlan.shoppingList).filter(([,v])=>v?.length).forEach(([cat,its])=>{
       its.forEach(item=>{
         const store=storeMap[item]||userStores[0]||"Other";
         if(!byStore[store])byStore[store]={};
@@ -896,29 +912,29 @@ Return ONLY valid JSON:
   };
 
   const printPlan=()=>{
-    if(!plan)return;
-    let h=`<html><head><title>${plan.title}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;padding:24px;font-size:13px;line-height:1.5}h1{font-size:22px;margin-bottom:16px}h2{font-size:16px;margin:18px 0 6px;border-bottom:1.5px solid #ddd;padding-bottom:4px}h3{font-size:13px;margin:12px 0 3px;text-transform:uppercase;letter-spacing:.5px;color:#888}.meal{margin-bottom:10px;padding:8px 0;border-bottom:1px solid #eee}.meal b{font-size:14px}.item{padding:3px 0 3px 20px;position:relative}.item::before{content:"☐";position:absolute;left:0}ol{padding-left:20px}ol li{margin-bottom:4px}@media print{body{padding:16px}}</style></head><body>`;
-    h+=`<h1>🍲 ${plan.title}</h1>`;
-    if(plan.prepGuide){h+=`<h2>Prep Day — ~${plan.prepGuide.minutes} min</h2><ol>`;plan.prepGuide.steps.forEach(s=>h+=`<li>${s}</li>`);h+=`</ol>`}
+    if(!activePlan)return;
+    let h=`<html><head><title>${activePlan.title}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;padding:24px;font-size:13px;line-height:1.5}h1{font-size:22px;margin-bottom:16px}h2{font-size:16px;margin:18px 0 6px;border-bottom:1.5px solid #ddd;padding-bottom:4px}h3{font-size:13px;margin:12px 0 3px;text-transform:uppercase;letter-spacing:.5px;color:#888}.meal{margin-bottom:10px;padding:8px 0;border-bottom:1px solid #eee}.meal b{font-size:14px}.item{padding:3px 0 3px 20px;position:relative}.item::before{content:"☐";position:absolute;left:0}ol{padding-left:20px}ol li{margin-bottom:4px}@media print{body{padding:16px}}</style></head><body>`;
+    h+=`<h1>🍲 ${activePlan.title}</h1>`;
+    if(activePlan.prepGuide){h+=`<h2>Prep Day — ~${activePlan.prepGuide.minutes} min</h2><ol>`;activePlan.prepGuide.steps.forEach(s=>h+=`<li>${s}</li>`);h+=`</ol>`}
     h+=`<h2>Meals</h2>`;
-    plan.meals?.forEach(m=>{h+=`<div class="meal"><b>${m.day}: ${m.name}</b> (${m.time}m)`;if(m.prep)h+=`<h3>Prepped</h3><div>${m.prep}</div>`;if(m.finish)h+=`<h3>Tonight</h3><div>${m.finish}</div>`;h+=`</div>`});
+    activePlan.meals?.forEach(m=>{h+=`<div class="meal"><b>${m.day}: ${m.name}</b> (${m.time}m)`;if(m.prep)h+=`<h3>Prepped</h3><div>${m.prep}</div>`;if(m.finish)h+=`<h3>Tonight</h3><div>${m.finish}</div>`;h+=`</div>`});
     h+=`<h2>Shopping List</h2>`;
-    Object.entries(plan.shoppingList).filter(([,v])=>v?.length).forEach(([c,its])=>{h+=`<h3>${c}</h3>`;its.forEach(i=>h+=`<div class="item">${i}</div>`)});
+    Object.entries(activePlan.shoppingList).filter(([,v])=>v?.length).forEach(([c,its])=>{h+=`<h3>${c}</h3>`;its.forEach(i=>h+=`<div class="item">${i}</div>`)});
     h+=`</body></html>`;
     const w=window.open("","_blank");w.document.write(h);w.document.close();w.print()
   };
 
   // ── Build store-split shopping view ──
   const buildStoreMap=()=>{
-    if(!plan?.shoppingList)return{};
-    const sm=plan.storeMap||{};
+    if(!activePlan?.shoppingList)return{};
+    const sm=activePlan.storeMap||{};
     const byStore={};
     // initialize with user stores + "Other"
     userStores.forEach(s=>{byStore[s]={}});
     byStore["Other"]={};
-    Object.entries(plan.shoppingList).filter(([,v])=>v?.length).forEach(([cat,its])=>{
+    Object.entries(activePlan.shoppingList).filter(([,v])=>v?.length).forEach(([cat,its])=>{
       its.forEach(item=>{
-        const inPantry=pantry.some(p=>item.toLowerCase().includes(p.toLowerCase()));
+        const inPantry=pantry.some(p=>{const re=new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\b`,'i');return re.test(item)});
         if(inPantry)return;
         const store=sm[item]||(userStores.length?userStores[0]:"Other");
         if(!byStore[store])byStore[store]={};
@@ -1136,7 +1152,7 @@ Return ONLY valid JSON:
                   noPrepFinish:Array.isArray(adv.steps)?adv.steps:[],shared:[]};
                 const updated=[...(activePlan.meals||[])];
                 updated[i]=newMeal;
-                sPl({...activePlan,meals:updated});
+                setActivePlan({...activePlan,meals:updated});
                 setAdventureSwapMode(false);setAdventureExpanded(false);
                 flash(`${m.day} swapped to ${adv.name}!`);
               }}>
@@ -1152,7 +1168,7 @@ Return ONLY valid JSON:
             <button className="btn bg" style={{flex:1,padding:"11px 16px",fontSize:13,background:"#7C5AB8"}} onClick={()=>{
               const adv=activePlan.adventureSuggestion;
               const currentMeals=activePlan.meals||[];
-              if(currentMeals.some(m=>m.name===adv.name)){flash("Already in this week's activePlan!");return;}
+              if(currentMeals.some(m=>m.name===adv.name)){flash("Already in this week's plan!");return;}
               const usedDays=currentMeals.map(m=>m.day);
               const freeDay=DAYS.find(d=>!usedDays.includes(d));
               if(freeDay){
@@ -1161,7 +1177,7 @@ Return ONLY valid JSON:
                   prep:Array.isArray(adv.prepSteps)?adv.prepSteps:[],
                   finish:Array.isArray(adv.steps)?adv.steps:[adv.teaser||"Cook and serve"],
                   noPrepFinish:Array.isArray(adv.steps)?adv.steps:[],shared:[]};
-                sPl({...activePlan,meals:[...currentMeals,newMeal]});
+                setActivePlan({...activePlan,meals:[...currentMeals,newMeal]});
                 setAdventureExpanded(false);
                 flash(`${adv.name} added to ${freeDay}!`);
               } else {
@@ -1231,11 +1247,10 @@ Return ONLY valid JSON:
         <button className="btn bo bsm" style={{marginLeft:"auto"}} onClick={()=>setModal({type:"scanner"})}>{I.receipt} Scan Receipt</button>
       </div>
       {/* Already have nudge */}
-      {purchases.length>0&&(()=>{
-        const available=getAvailableItems();
+      {purchases.length>0&&availableItemsMemo.length>0&&(()=>{
         const covered=[];
         Object.entries(plan.shoppingList||{}).forEach(([cat,its])=>(its||[]).forEach(item=>{
-          if(!pantry.some(p=>item.toLowerCase().includes(p.toLowerCase()))&&isCovered(item,available))covered.push(item);
+          if(!pantry.some(p=>{const re=new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\b`,'i');return re.test(item)})&&isCovered(item,availableItemsMemo))covered.push(item);
         }));
         return covered.length>0?<div className="nudge nudge-sa" style={{marginBottom:12}}><b>✓</b><div><b>Already in your kitchen</b> (from recent purchases — removed from list):<br/><span style={{fontSize:12}}>{covered.join(", ")}</span></div></div>:null;
       })()}
@@ -1261,7 +1276,7 @@ Return ONLY valid JSON:
       {/* ── COMBINED VIEW ── */}
       {shopView==="combined"&&Object.entries(plan.shoppingList).filter(([,v])=>v?.length).map(([cat,its])=>{
         const visItems=its.filter((item,i)=>{
-          const inPantry=pantry.some(p=>item.toLowerCase().includes(p.toLowerCase()));
+          const inPantry=pantry.some(p=>{const re=new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\b`,'i');return re.test(item)});
           if(inPantry)return false;
           const k=`${cat}-${i}`;const isChecked=!!checked[k];
           if(shopFilter==="unchecked")return !isChecked;
@@ -1272,8 +1287,9 @@ Return ONLY valid JSON:
         return <div className="shcat" key={cat}>
           <div className="shcat-t">{cat}</div>
           {its.map((item,i)=>{
-            const inPantry=pantry.some(p=>item.toLowerCase().includes(p.toLowerCase()));
-            const inFridge=purchases.length>0&&isCovered(item,getAvailableItems());if(inPantry)return null;
+            const inPantry=pantry.some(p=>{const re=new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\b`,'i');return re.test(item)});
+            if(inPantry)return null;
+            const inFridge=purchases.length>0&&isCovered(item,availableItemsMemo);if(inFridge)return null;
             const k=`${cat}-${i}`;const isChecked=!!checked[k];
             if(shopFilter==="unchecked"&&isChecked)return null;
             if(shopFilter==="checked"&&!isChecked)return null;
@@ -1402,6 +1418,9 @@ Return ONLY valid JSON:
                 setToast("✓ Marked as bought");
                 setTimeout(()=>{setToast(null);setUndoSupply(null);},5000);
               }}>✓ Bought</button>
+            <button className="ib" title="Edit item" onClick={()=>setModal({type:"supply",data:s})}>
+              {I.edit}
+            </button>
             <button className="ib dng" title="Remove item" onClick={()=>{sS(supplies.filter(x=>x.id!==s.id));flash("Removed");}}>
               {I.trash}
             </button>
@@ -1522,7 +1541,7 @@ Return ONLY valid JSON:
       </div>
       <p style={{fontSize:13,color:"var(--i2)",marginBottom:2,fontWeight:600}}>{[user?.user_metadata?.first_name,user?.user_metadata?.last_name].filter(Boolean).join(" ")||""}</p>
       <p style={{fontSize:12,color:"var(--i3)",marginBottom:12}}>{user?.email}</p>
-      <button className="btn bo" style={{width:"100%",color:"var(--rd)",borderColor:"var(--rd)"}} onClick={async()=>{await supabase.auth.signOut();}}>Sign Out</button>
+      <button className="btn bo" style={{width:"100%",color:"var(--rd)",borderColor:"var(--rd)"}} onClick={async()=>{Object.values(LS).forEach(k=>localStorage.removeItem(k));await supabase.auth.signOut();}}>Sign Out</button>
     </div>
   </>}
   </main>

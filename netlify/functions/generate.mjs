@@ -120,8 +120,10 @@ Categories: Produce, Meat & Seafood, Dairy & Eggs, Bakery, Frozen, Canned & Dry,
         );
       }
 
+      // Use vision model for images, fast model for text-only
+      const model = imageBase64 ? "grok-2-vision-latest" : "grok-4-1-fast-non-reasoning";
       const data = await xai(apiKey, {
-        model: "grok-4-1-fast-non-reasoning",
+        model,
         max_tokens: 4096,
         temperature: 0.1,
         messages: [
