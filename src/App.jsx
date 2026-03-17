@@ -891,6 +891,15 @@ Return ONLY valid JSON:
     return byStore
   };
 
+  /* ═══ LOADING — wait for cloud sync before showing app ═══ */
+  if(!cloudLoaded){
+    return(<><style>{css}</style><div className="auth-wrap"><div style={{textAlign:"center"}}>
+      <div style={{fontSize:40,marginBottom:16}}>🍲</div>
+      <div className="dots"><span/><span/><span/></div>
+      <p style={{fontSize:13,color:"var(--i3)",marginTop:12}}>Loading your kitchen...</p>
+    </div></div></>);
+  }
+
   /* ═══ ONBOARDING ═══ */
   if(!onboarded){
     const obStores=prefs.stores||["Wegmans","Costco"];
