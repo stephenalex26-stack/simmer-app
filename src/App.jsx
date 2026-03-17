@@ -1,21 +1,95 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { supabase } from "./supabase";
 
-/*  SIMMER v5.2 — simmer-app.netlify.app
-    New in v5:
-    • Custom stores per user (onboarding + settings)
-    • Receipt/purchase scanner — photo, manual text, paste email
-    • Purchase history with AI learning
-    • Shopping list split by store
-    • Restock store dropdown uses user's custom stores
-    v5.1 fixes:
-    • Ingredient accountability — every ingredient named in steps
-    • Adventure suggestion — one fun cuisine-stretch recipe per plan
+/*  SIMMER v6.0 — simmer-app.netlify.app
+    New in v6:
+    • Supabase auth — email/password login, works across devices
+    • Cloud sync — all data saved to Supabase, localStorage as offline cache
+    • Automatic migration of existing localStorage data on first login
     v5.2 additions:
     • PDF receipt support (Costco + any text PDF) via PDF.js client-side extraction  */
 
 const LS={r:"sm4-recipes",p:"sm4-prefs",pl:"sm4-plan",pl2:"sm5-plan2",s:"sm4-supplies",ck:"sm4-checked",rt:"sm4-ratings",pa:"sm4-pantry",hi:"sm4-history",ph:"sm5-purchases"};
 const ld=(k,f)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):f}catch{return f}};
 const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
+
+/* ── Supabase sync helpers ── */
+const dbSave=async(table,userId,data,key)=>{
+  try{
+    if(table==="user_prefs"){
+      await supabase.from("user_prefs").upsert({id:userId,prefs:data,updated_at:new Date().toISOString()});
+    }else if(table==="plans"){
+      await supabase.from("plans").upsert({user_id:userId,...data,updated_at:new Date().toISOString()});
+    }else if(table==="user_data"){
+      await supabase.from("user_data").upsert({user_id:userId,...data,updated_at:new Date().toISOString()});
+    }else if(table==="recipes"){
+      // full replace: delete all then insert
+      await supabase.from("recipes").delete().eq("user_id",userId);
+      if(data.length)await supabase.from("recipes").insert(data.map(r=>({id:r.id,user_id:userId,data:r,updated_at:new Date().toISOString()})));
+    }else if(table==="supplies"){
+      await supabase.from("supplies").delete().eq("user_id",userId);
+      if(data.length)await supabase.from("supplies").insert(data.map(s=>({id:s.id,user_id:userId,data:s,updated_at:new Date().toISOString()})));
+    }else if(table==="purchases"){
+      await supabase.from("purchases").delete().eq("user_id",userId);
+      if(data.length)await supabase.from("purchases").insert(data.map(p=>({id:p.id,user_id:userId,data:p,created_at:new Date().toISOString()})));
+    }
+  }catch(e){console.warn("Supabase save error:",table,e);}
+};
+
+const dbLoad=async(userId)=>{
+  try{
+    const[prefRes,recRes,planRes,supRes,purRes,udRes]=await Promise.all([
+      supabase.from("user_prefs").select("prefs").eq("id",userId).single(),
+      supabase.from("recipes").select("data").eq("user_id",userId),
+      supabase.from("plans").select("current_plan,next_plan").eq("user_id",userId).single(),
+      supabase.from("supplies").select("data").eq("user_id",userId),
+      supabase.from("purchases").select("data").eq("user_id",userId).order("created_at",{ascending:false}),
+      supabase.from("user_data").select("pantry,ratings,checked,history").eq("user_id",userId).single(),
+    ]);
+    return{
+      prefs:prefRes.data?.prefs||null,
+      recipes:recRes.data?.map(r=>r.data)||null,
+      plan:planRes.data?.current_plan||null,
+      nextPlan:planRes.data?.next_plan||null,
+      supplies:supRes.data?.map(s=>s.data)||null,
+      purchases:purRes.data?.map(p=>p.data)||null,
+      pantry:udRes.data?.pantry||null,
+      ratings:udRes.data?.ratings||null,
+      checked:udRes.data?.checked||null,
+      history:udRes.data?.history||null,
+    };
+  }catch(e){console.warn("Supabase load error:",e);return null;}
+};
+
+const migrateLocalToCloud=async(userId)=>{
+  const migrated=localStorage.getItem("sm-migrated-"+userId);
+  if(migrated)return false;
+  // check if user has any local data worth migrating
+  const hasLocal=localStorage.getItem(LS.r)||localStorage.getItem(LS.p);
+  if(!hasLocal)return false;
+  try{
+    const recipes=ld(LS.r,null);
+    const prefs=ld(LS.p,null);
+    const plan=ld(LS.pl,null);
+    const nextPlan=ld(LS.pl2,null);
+    const supplies=ld(LS.s,null);
+    const purchases=ld(LS.ph,null);
+    const pantry=ld(LS.pa,null);
+    const ratings=ld(LS.rt,null);
+    const checked=ld(LS.ck,null);
+    const history=ld(LS.hi,null);
+    const saves=[];
+    if(prefs)saves.push(dbSave("user_prefs",userId,prefs));
+    if(recipes)saves.push(dbSave("recipes",userId,recipes));
+    if(plan||nextPlan)saves.push(dbSave("plans",userId,{current_plan:plan,next_plan:nextPlan}));
+    if(supplies)saves.push(dbSave("supplies",userId,supplies));
+    if(purchases)saves.push(dbSave("purchases",userId,purchases));
+    if(pantry||ratings||checked||history)saves.push(dbSave("user_data",userId,{pantry:pantry||[],ratings:ratings||{},checked:checked||{},history:history||[]}));
+    await Promise.all(saves);
+    localStorage.setItem("sm-migrated-"+userId,"1");
+    return true;
+  }catch(e){console.warn("Migration error:",e);return false;}
+};
 
 const DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const RECIPES=[
@@ -147,9 +221,69 @@ html,body{font-family:var(--bd);background:var(--bg);color:var(--ink);-webkit-fo
 .tab-strip{display:flex;gap:4px;margin-bottom:16px;overflow-x:auto;padding-bottom:2px}
 .tab-btn{padding:7px 14px;border-radius:20px;border:1.5px solid var(--sd);background:none;font-family:var(--bd);font-size:12.5px;font-weight:600;color:var(--i3);cursor:pointer;white-space:nowrap}.tab-btn.on{background:var(--ru);border-color:var(--ru);color:#fff}
 @keyframes fi{from{opacity:0}to{opacity:1}}@keyframes su{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+.auth-wrap{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--bg)}
+.auth-box{width:100%;max-width:380px;text-align:center}
+.auth-box .fi{margin-bottom:10px}
+.auth-toggle{margin-top:16px;font-size:13px;color:var(--i2)}.auth-toggle button{border:none;background:none;color:var(--ru);font-weight:700;cursor:pointer;font-family:var(--bd);font-size:13px}
+.sync-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:6px}
 `;
 
+/* ═══ AUTH WRAPPER ═══ */
 export default function App(){
+  const[user,setUser]=useState(null);
+  const[authLoading,setAuthLoading]=useState(true);
+  const[authScreen,setAuthScreen]=useState("login"); // "login" | "signup"
+  const[authEmail,setAuthEmail]=useState("");
+  const[authPass,setAuthPass]=useState("");
+  const[authError,setAuthError]=useState(null);
+  const[authBusy,setAuthBusy]=useState(false);
+
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data:{session}})=>{
+      setUser(session?.user||null);
+      setAuthLoading(false);
+    });
+    const{data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>{
+      setUser(session?.user||null);
+    });
+    return()=>subscription.unsubscribe();
+  },[]);
+
+  const handleAuth=async(e)=>{
+    e.preventDefault();
+    setAuthError(null);setAuthBusy(true);
+    try{
+      if(authScreen==="signup"){
+        const{error}=await supabase.auth.signUp({email:authEmail,password:authPass});
+        if(error)throw error;
+        setAuthError("Check your email for a confirmation link!");
+      }else{
+        const{error}=await supabase.auth.signInWithPassword({email:authEmail,password:authPass});
+        if(error)throw error;
+      }
+    }catch(e){setAuthError(e.message||"Authentication failed");}
+    setAuthBusy(false);
+  };
+
+  if(authLoading)return<><style>{css}</style><div className="auth-wrap"><div className="dots"><span/><span/><span/></div></div></>;
+
+  if(!user)return(<><style>{css}</style><div className="auth-wrap"><div className="auth-box">
+    <div style={{width:56,height:56,background:"var(--rub)",border:"2px solid #EAC4B8",borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",fontSize:30}}>🍲</div>
+    <h2 style={{fontFamily:"var(--hd)",fontSize:26,marginBottom:4}}>Simmer</h2>
+    <p style={{color:"var(--i2)",fontSize:14,marginBottom:24}}>Dinner's handled.</p>
+    <form onSubmit={handleAuth}>
+      <input className="fi" type="email" placeholder="Email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} required autoFocus/>
+      <input className="fi" type="password" placeholder="Password" value={authPass} onChange={e=>setAuthPass(e.target.value)} required minLength={6}/>
+      {authError&&<div style={{fontSize:13,color:authScreen==="signup"&&authError.includes("Check")?"var(--sa)":"var(--rd)",marginBottom:10,padding:"8px 12px",background:authScreen==="signup"&&authError.includes("Check")?"var(--sab)":"var(--rb)",borderRadius:10}}>{authError}</div>}
+      <button className="btn bg" type="submit" disabled={authBusy} style={{marginTop:4}}>{authBusy?"...":(authScreen==="login"?"Sign In":"Create Account")}</button>
+    </form>
+    <div className="auth-toggle">{authScreen==="login"?<>Don't have an account? <button onClick={()=>{setAuthScreen("signup");setAuthError(null)}}>Sign up</button></>:<>Already have an account? <button onClick={()=>{setAuthScreen("login");setAuthError(null)}}>Sign in</button></>}</div>
+  </div></div></>);
+
+  return <SimmerApp user={user}/>;
+}
+
+function SimmerApp({user}){
   const[recipes,setRecipes]=useState(()=>ld(LS.r,RECIPES));
   const[prefs,setPrefs]=useState(()=>{const p=ld(LS.p,DEF_PREFS);return{...DEF_PREFS,...p,stores:p.stores&&p.stores.length?p.stores:DEF_PREFS.stores};});
   const[plan,setPlan]=useState(()=>ld(LS.pl,null));
@@ -187,20 +321,57 @@ export default function App(){
   const[scanStore,setScanStore]=useState("");
   const[useUpIngredients,setUseUpIngredients]=useState("");
   const[undoSupply,setUndoSupply]=useState(null); // {id, prevDate}
+  const[cloudLoaded,setCloudLoaded]=useState(false);
+  const[syncing,setSyncing]=useState(false);
   const fileRef=useRef();
+  const syncTimer=useRef({});
 
   // derived: user's stores
   const userStores=prefs.stores||["Wegmans","Costco"];
 
-  const sR=v=>{setRecipes(v);sv(LS.r,v)};
-  const sP=v=>{setPrefs(v);sv(LS.p,v)};
-  const sPl=v=>{setPlan(v);sv(LS.pl,v)};const sNPl=v=>{setNextPlan(v);sv(LS.pl2,v)};
-  const sS=v=>{setSupplies(v);sv(LS.s,v)};
-  const sC=v=>{setChecked(v);sv(LS.ck,v)};
-  const sRt=v=>{setRatings(v);sv(LS.rt,v)};
-  const sPa=v=>{setPantry(v);sv(LS.pa,v)};
-  const sHi=v=>{setHistory(v);sv(LS.hi,v)};
-  const sPh=v=>{setPurchases(v);sv(LS.ph,v)};
+  // debounced cloud save — waits 800ms after last change before syncing
+  const debouncedSave=useCallback((table,data,key)=>{
+    if(!user?.id)return;
+    if(syncTimer.current[table])clearTimeout(syncTimer.current[table]);
+    syncTimer.current[table]=setTimeout(()=>{
+      setSyncing(true);
+      dbSave(table,user.id,data,key).finally(()=>setSyncing(false));
+    },800);
+  },[user?.id]);
+
+  const sR=v=>{setRecipes(v);sv(LS.r,v);debouncedSave("recipes",v)};
+  const sP=v=>{setPrefs(v);sv(LS.p,v);debouncedSave("user_prefs",v)};
+  const sPl=v=>{setPlan(v);sv(LS.pl,v);debouncedSave("plans",{current_plan:v,next_plan:nextPlan})};
+  const sNPl=v=>{setNextPlan(v);sv(LS.pl2,v);debouncedSave("plans",{current_plan:plan,next_plan:v})};
+  const sS=v=>{setSupplies(v);sv(LS.s,v);debouncedSave("supplies",v)};
+  const sC=v=>{setChecked(v);sv(LS.ck,v);debouncedSave("user_data",{checked:v,ratings,pantry,history})};
+  const sRt=v=>{setRatings(v);sv(LS.rt,v);debouncedSave("user_data",{ratings:v,checked,pantry,history})};
+  const sPa=v=>{setPantry(v);sv(LS.pa,v);debouncedSave("user_data",{pantry:v,ratings,checked,history})};
+  const sHi=v=>{setHistory(v);sv(LS.hi,v);debouncedSave("user_data",{history:v,ratings,checked,pantry})};
+  const sPh=v=>{setPurchases(v);sv(LS.ph,v);debouncedSave("purchases",v)};
+
+  // ── Load from Supabase on mount, migrate localStorage if needed ──
+  useEffect(()=>{
+    if(!user?.id||cloudLoaded)return;
+    (async()=>{
+      const migrated=await migrateLocalToCloud(user.id);
+      const cloud=await dbLoad(user.id);
+      if(cloud&&!migrated){
+        // cloud data exists — use it (overrides localStorage)
+        if(cloud.prefs){const p={...DEF_PREFS,...cloud.prefs};setPrefs(p);sv(LS.p,p);setOnboarded(true);}
+        if(cloud.recipes){setRecipes(cloud.recipes);sv(LS.r,cloud.recipes);}
+        if(cloud.plan){setPlan(cloud.plan);sv(LS.pl,cloud.plan);}
+        if(cloud.nextPlan){setNextPlan(cloud.nextPlan);sv(LS.pl2,cloud.nextPlan);}
+        if(cloud.supplies){setSupplies(cloud.supplies);sv(LS.s,cloud.supplies);}
+        if(cloud.purchases){setPurchases(cloud.purchases);sv(LS.ph,cloud.purchases);}
+        if(cloud.pantry){setPantry(cloud.pantry);sv(LS.pa,cloud.pantry);}
+        if(cloud.ratings){setRatings(cloud.ratings);sv(LS.rt,cloud.ratings);}
+        if(cloud.checked){setChecked(cloud.checked);sv(LS.ck,cloud.checked);}
+        if(cloud.history){setHistory(cloud.history);sv(LS.hi,cloud.history);}
+      }
+      setCloudLoaded(true);
+    })();
+  },[user?.id]);
 
   const flash=m=>{setToast(m);setTimeout(()=>setToast(null),2200)};
   const toggleFav=id=>sR(recipes.map(r=>r.id===id?{...r,favorite:!r.favorite}:r));
@@ -1212,7 +1383,7 @@ Return ONLY valid JSON:
   {tab==="settings"&&<>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
       <div style={{display:"flex",alignItems:"center",gap:8}}><button className="ib" onClick={()=>setTab("home")} style={{marginLeft:-8}}>←</button><h1 className="pg-t">Settings</h1></div>
-      <span style={{fontSize:12,color:"var(--sa)",fontWeight:600}}>Changes save automatically</span>
+      <span style={{fontSize:12,color:"var(--sa)",fontWeight:600}}><span className="sync-dot" style={{background:syncing?"var(--am)":"var(--sa)"}}/>Synced</span>
     </div>
     <div className="cd">
       <div className="frow">
@@ -1277,6 +1448,16 @@ Return ONLY valid JSON:
           })}
         </div>
       </div>
+    </div>
+    {/* Account section */}
+    <div className="cd" style={{marginTop:8}}>
+      <div className="fl" style={{fontSize:15,marginBottom:12}}>Account</div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+        <span className="sync-dot" style={{background:syncing?"var(--am)":"var(--sa)"}}/>
+        <span style={{fontSize:13,color:"var(--i2)"}}>{syncing?"Syncing...":"Synced to cloud"}</span>
+      </div>
+      <p style={{fontSize:12,color:"var(--i3)",marginBottom:12}}>{user?.email}</p>
+      <button className="btn bo" style={{width:"100%",color:"var(--rd)",borderColor:"var(--rd)"}} onClick={async()=>{await supabase.auth.signOut();}}>Sign Out</button>
     </div>
   </>}
   </main>
