@@ -442,7 +442,6 @@ function SimmerApp({user}){
   const activePlan=planView==="next"?nextPlan:plan;
   const setActivePlan=planView==="next"?sNPl:sPl;
   const todayMeal=plan?.meals?.find(m=>m.day===today);
-  const availableItemsMemo=getAvailableItems();
 
   // ── Store helpers ──
   const addStore=(name)=>{
@@ -698,6 +697,7 @@ function SimmerApp({user}){
     });
     return available;
   };
+  const availableItemsMemo=getAvailableItems();
 
   // Check if a shopping list item is covered by available items
   const isCovered=(shoppingItem,available)=>{
