@@ -957,6 +957,7 @@ Return ONLY valid JSON:
       <div style={{fontSize:40,marginBottom:16}}>🍲</div>
       <div className="dots"><span/><span/><span/></div>
       <p style={{fontSize:13,color:"var(--i3)",marginTop:12}}>Loading your kitchen...</p>
+      <button style={{marginTop:24,border:"none",background:"none",color:"var(--ru)",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>setCloudLoaded(true)}>Taking too long? Tap here</button>
     </div></div></>);
   }
 
