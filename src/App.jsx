@@ -104,10 +104,8 @@ const RECIPES=[
 {id:"5",name:"Black Bean Taco Bowls",time:15,servings:4,favorite:false,ingredients:"2 cans black beans, 2 cups rice, 1 cup corn, 2 bell peppers (diced), 1 avocado, 1/4 cup cilantro, 1 lime, 1 tsp cumin, 1 tsp chili powder, salsa, sour cream, cheese",prep:"Cook rice. Season beans: cumin + chili powder + 2 tbsp water, warm 5 min. Dice peppers.",finish:"Reheat rice + beans. Assemble: rice, beans, corn, peppers, avocado, cilantro, salsa, cheese, lime.",source:""},
 {id:"6",name:"Pesto Chicken & Potatoes",time:30,servings:4,favorite:false,ingredients:"4 chicken thighs, 1.5 lb baby potatoes (halved), 1/2 cup pesto, 3 tbsp olive oil, cherry tomatoes, 3/4 tsp salt, 1/2 tsp pepper, basil, parmesan",prep:"Halve potatoes. Coat chicken with pesto.",finish:"400°F. Potatoes + oil + salt + pepper on pan. Add chicken + tomatoes. 25-30 min until 165°F. Top basil + parm.",source:""},
 ];
-const SUPPLIES=[
-{id:"s1",name:"Paper Towels",where:"Costco",weeks:4,last:null},{id:"s2",name:"Toilet Paper",where:"Costco",weeks:5,last:null},{id:"s3",name:"Trash Bags",where:"Costco",weeks:6,last:null},{id:"s4",name:"Dishwasher Pods",where:"Costco",weeks:5,last:null},{id:"s5",name:"Goldfish Crackers",where:"Costco",weeks:3,last:null},{id:"s6",name:"Granola Bars",where:"Costco",weeks:3,last:null},{id:"s7",name:"String Cheese",where:"Costco",weeks:2,last:null},{id:"s8",name:"Laundry Detergent",where:"Costco",weeks:8,last:null},
-];
-const DEF_PREFS={meals:5,time:30,prepDays:["Sunday"],adults:2,kids:3,diet:"",proteinPriority:"medium",maxPastaPerWeek:2,maxRedMeatPerWeek:2,stores:["Wegmans","Costco"],cuisines:[],weeklyBudget:""};
+const SUPPLIES=[];
+const DEF_PREFS={meals:5,time:30,prepDays:["Sunday"],adults:2,kids:3,diet:"",proteinPriority:"medium",maxPastaPerWeek:2,maxRedMeatPerWeek:2,stores:[],cuisines:[],weeklyBudget:""};
 
 /* ── icons ── */
 const I={
@@ -244,6 +242,8 @@ export default function App(){
   const[authShowPass,setAuthShowPass]=useState(false);
   const[authError,setAuthError]=useState(null);
   const[authBusy,setAuthBusy]=useState(false);
+  const[forgotPw,setForgotPw]=useState(false);
+  const[forgotMsg,setForgotMsg]=useState(null);
 
   useEffect(()=>{
     supabase.auth.getSession().then(({data:{session}})=>{
@@ -292,6 +292,16 @@ export default function App(){
       <button className="btn bg" type="submit" disabled={authBusy} style={{marginTop:4}}>{authBusy?"...":(authScreen==="login"?"Sign In":"Create Account")}</button>
     </form>
     <div className="auth-toggle">{authScreen==="login"?<>Don't have an account? <button onClick={()=>{setAuthScreen("signup");setAuthError(null)}}>Sign up</button></>:<>Already have an account? <button onClick={()=>{setAuthScreen("login");setAuthError(null)}}>Sign in</button></>}</div>
+    {authScreen==="login"&&!forgotPw&&<div style={{marginTop:12}}><button style={{border:"none",background:"none",color:"var(--i3)",fontSize:12,cursor:"pointer",fontFamily:"var(--bd)",textDecoration:"underline"}} onClick={()=>{setForgotPw(true);setForgotMsg(null)}}>Forgot password?</button></div>}
+    {forgotPw&&<div style={{marginTop:16,padding:"16px",background:"var(--sand)",borderRadius:12,textAlign:"left"}}>
+      <label className="fl" style={{marginBottom:6}}>Reset password</label>
+      <input className="fi" type="email" placeholder="Enter your email" id="forgot-email" style={{marginBottom:8}}/>
+      {forgotMsg&&<div style={{fontSize:12,color:forgotMsg.includes("Check")?"var(--sa)":"var(--rd)",marginBottom:8,padding:"6px 10px",background:forgotMsg.includes("Check")?"var(--sab)":"var(--rb)",borderRadius:8}}>{forgotMsg}</div>}
+      <div style={{display:"flex",gap:8}}>
+        <button className="btn bg bsm" style={{flex:1}} onClick={async()=>{const el=document.getElementById("forgot-email");const email=el?.value?.trim();if(!email){setForgotMsg("Enter your email");return;}try{const{error}=await supabase.auth.resetPasswordForEmail(email);if(error)throw error;setForgotMsg("Check your email for a reset link!");}catch(e){setForgotMsg(e.message||"Failed to send reset email");}}}>Send Reset Link</button>
+        <button className="btn bo bsm" onClick={()=>{setForgotPw(false);setForgotMsg(null)}}>Cancel</button>
+      </div>
+    </div>}
   </div></div></>);
 
   return <SimmerApp user={user}/>;
@@ -332,6 +342,10 @@ function SimmerApp({user}){
   const[adventureExpanded,setAdventureExpanded]=useState(false);
   const[adventureLoading,setAdventureLoading]=useState(false);
   const[adventureSwapMode,setAdventureSwapMode]=useState(false);
+  const[confirm,setConfirm]=useState(null);
+  const[recSearch,setRecSearch]=useState("");
+  const[recFilter,setRecFilter]=useState("all");
+  const[obStep,setObStep]=useState(1);
   const[scanStore,setScanStore]=useState("");
   const[useUpIngredients,setUseUpIngredients]=useState("");
   const[undoSupply,setUndoSupply]=useState(null); // {id, prevDate}
@@ -963,73 +977,93 @@ Return ONLY valid JSON:
 
   /* ═══ ONBOARDING ═══ */
   if(!onboarded){
-    const obStores=prefs.stores||["Wegmans","Costco"];
+    const obStores=prefs.stores||[];
+    const finishOnboarding=()=>{sP(prefs);sR(recipes);sS(supplies);setOnboarded(true);flash("Welcome! 🎉")};
     return(<><style>{css}</style><div className="ob">
       <div className="ob-logo">🍲</div>
       <h2>Simmer</h2>
       <p>Dinner's handled. Tell us about your family and we'll take care of the rest.</p>
-      <div className="frow" style={{marginBottom:14,textAlign:"left"}}>
-        <div className="fg"><label className="fl">Adults</label><select className="fsel" value={prefs.adults} onChange={e=>setPrefs({...prefs,adults:+e.target.value})}>{[1,2,3,4].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
-        <div className="fg"><label className="fl">Kids</label><select className="fsel" value={prefs.kids} onChange={e=>setPrefs({...prefs,kids:+e.target.value})}>{[0,1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
+      {/* progress bar */}
+      <div style={{display:"flex",gap:6,marginBottom:24,justifyContent:"center"}}>
+        {[1,2,3].map(s=><div key={s} style={{width:s===obStep?40:24,height:6,borderRadius:3,background:s<=obStep?"var(--ru)":"var(--sd)",transition:"all .2s"}}/>)}
       </div>
-      <div className="frow" style={{marginBottom:14,textAlign:"left"}}>
-        <div className="fg"><label className="fl">Dinners/week</label><select className="fsel" value={prefs.meals} onChange={e=>setPrefs({...prefs,meals:+e.target.value})}>{[3,4,5,6,7].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
-        <div className="fg"><label className="fl">Max cook time</label><select className="fsel" value={prefs.time} onChange={e=>setPrefs({...prefs,time:+e.target.value})}>{[15,20,25,30,45].map(n=><option key={n} value={n}>{n} min</option>)}</select></div>
-      </div>
-      <div className="fg" style={{textAlign:"left"}}>
-        <label className="fl">Prep days</label>
-        <div className="dpick">{DAYS.map(d=><button key={d} className={`dchip ${(prefs.prepDays||[]).includes(d)?"on":""}`} onClick={()=>{const ds=prefs.prepDays||["Sunday"];const n=ds.includes(d)?ds.filter(x=>x!==d):[...ds,d];if(n.length)setPrefs({...prefs,prepDays:n})}}>{d.slice(0,3)}</button>)}</div>
-      </div>
-      <div className="fg" style={{textAlign:"left"}}>
-        <label className="fl">Protein priority</label>
-        <select className="fsel" value={prefs.proteinPriority} onChange={e=>setPrefs({...prefs,proteinPriority:e.target.value})}><option value="high">High protein (meat every night)</option><option value="medium">Balanced</option><option value="low">Less meat / more veggies</option><option value="vegetarian">Vegetarian</option><option value="vegan">Vegan</option></select>
-      </div>
-      {/* ── NEW: Where do you shop? ── */}
-      <div className="fg" style={{textAlign:"left"}}>
-        <label className="fl">Where do you shop? <small>(your stores)</small></label>
-        <p style={{fontSize:12,color:"var(--i3)",marginBottom:8}}>Add your grocery and bulk stores — we'll use these to split your shopping lists.</p>
-        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
-          {obStores.map(s=><span key={s} className="store-chip" style={{background:"var(--rub)",color:"var(--ru)"}}>
-            {s}<button className="store-chip-rm" onClick={()=>{const u=obStores.filter(x=>x!==s);setPrefs({...prefs,stores:u.length?u:[]});}}>×</button>
-          </span>)}
+      {obStep===1&&<>
+        <div className="frow" style={{marginBottom:14,textAlign:"left"}}>
+          <div className="fg"><label className="fl">Adults</label><select className="fsel" value={prefs.adults} onChange={e=>setPrefs({...prefs,adults:+e.target.value})}>{[1,2,3,4].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
+          <div className="fg"><label className="fl">Kids</label><select className="fsel" value={prefs.kids} onChange={e=>setPrefs({...prefs,kids:+e.target.value})}>{[0,1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <input className="fi" style={{flex:1}} placeholder="e.g. Trader Joe's, Whole Foods..." value={storeInput} onChange={e=>setStoreInput(e.target.value)}
-            onKeyDown={e=>{if(e.key==="Enter"&&storeInput.trim()){const u=[...obStores,storeInput.trim()];setPrefs({...prefs,stores:u});setStoreInput("");}}}/>
-          <button className="btn bs bsm" onClick={()=>{if(storeInput.trim()){const u=[...obStores,storeInput.trim()];setPrefs({...prefs,stores:u});setStoreInput("");}}}>Add</button>
+        <div className="frow" style={{marginBottom:14,textAlign:"left"}}>
+          <div className="fg"><label className="fl">Dinners/week</label><select className="fsel" value={prefs.meals} onChange={e=>setPrefs({...prefs,meals:+e.target.value})}>{[3,4,5,6,7].map(n=><option key={n} value={n}>{n}</option>)}</select></div>
+          <div className="fg"><label className="fl">Max cook time</label><select className="fsel" value={prefs.time} onChange={e=>setPrefs({...prefs,time:+e.target.value})}>{[15,20,25,30,45].map(n=><option key={n} value={n}>{n} min</option>)}</select></div>
         </div>
-      </div>
-      <div className="fg" style={{textAlign:"left"}}>
-        <label className="fl">Favourite cuisines <small>(optional)</small></label>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:4}}>
-          {[
-            {name:"Italian",emoji:"🇮🇹"},
-            {name:"Mexican",emoji:"🇲🇽"},
-            {name:"Asian",emoji:"🥢"},
-            {name:"Mediterranean",emoji:"🫒"},
-            {name:"American",emoji:"🍔"},
-            {name:"Indian",emoji:"🇮🇳"},
-            {name:"Japanese",emoji:"🍱"},
-            {name:"Thai",emoji:"🇹🇭"},
-            {name:"Greek",emoji:"🇬🇷"},
-            {name:"Middle Eastern",emoji:"🧆"},
-            {name:"Korean",emoji:"🇰🇷"},
-            {name:"French",emoji:"🇫🇷"},
-          ].map(({name,emoji})=>{
-            const selected=(prefs.cuisines||[]).includes(name);
-            return <button key={name}
-              style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"10px 6px",border:`1.5px solid ${selected?"var(--ru)":"var(--sd)"}`,borderRadius:10,background:selected?"var(--rub)":"none",cursor:"pointer",fontSize:11,fontWeight:700,color:selected?"var(--ru)":"var(--i2)",transition:"all .15s"}}
-              onClick={()=>{const cur=prefs.cuisines||[];setPrefs({...prefs,cuisines:selected?cur.filter(x=>x!==name):[...cur,name]});}}>
-              <span style={{fontSize:20}}>{emoji}</span>{name}
-            </button>
-          })}
+        <button className="btn bg" style={{marginTop:12}} onClick={()=>setObStep(2)}>Next</button>
+      </>}
+      {obStep===2&&<>
+        <div className="fg" style={{textAlign:"left"}}>
+          <label className="fl">Prep days</label>
+          <div className="dpick">{DAYS.map(d=><button key={d} className={`dchip ${(prefs.prepDays||[]).includes(d)?"on":""}`} onClick={()=>{const ds=prefs.prepDays||["Sunday"];const n=ds.includes(d)?ds.filter(x=>x!==d):[...ds,d];if(n.length)setPrefs({...prefs,prepDays:n})}}>{d.slice(0,3)}</button>)}</div>
         </div>
-      </div>
-      <div className="fg" style={{textAlign:"left"}}>
-        <label className="fl">Any dietary needs? <small>(optional)</small></label>
-        <input className="fi" value={prefs.diet} onChange={e=>setPrefs({...prefs,diet:e.target.value})} placeholder="No shellfish, low carb, kids hate mushrooms..."/>
-      </div>
-      <button className="btn bg" style={{marginTop:12}} onClick={()=>{sP(prefs);sR(recipes);sS(supplies);setOnboarded(true);flash("Welcome! 🎉")}}>Let's Go</button>
+        <div className="fg" style={{textAlign:"left"}}>
+          <label className="fl">Protein priority</label>
+          <select className="fsel" value={prefs.proteinPriority} onChange={e=>setPrefs({...prefs,proteinPriority:e.target.value})}><option value="high">High protein (meat every night)</option><option value="medium">Balanced</option><option value="low">Less meat / more veggies</option><option value="vegetarian">Vegetarian</option><option value="vegan">Vegan</option></select>
+        </div>
+        <div className="fg" style={{textAlign:"left"}}>
+          <label className="fl">Where do you shop? <small>(your stores)</small></label>
+          <p style={{fontSize:12,color:"var(--i3)",marginBottom:8}}>Add your grocery and bulk stores — we'll use these to split your shopping lists.</p>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+            {obStores.map(s=><span key={s} className="store-chip" style={{background:"var(--rub)",color:"var(--ru)"}}>
+              {s}<button className="store-chip-rm" onClick={()=>{const u=obStores.filter(x=>x!==s);setPrefs({...prefs,stores:u.length?u:[]});}}>×</button>
+            </span>)}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <input className="fi" style={{flex:1}} placeholder="e.g. Trader Joe's, Whole Foods..." value={storeInput} onChange={e=>setStoreInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&storeInput.trim()){const u=[...obStores,storeInput.trim()];setPrefs({...prefs,stores:u});setStoreInput("");}}}/>
+            <button className="btn bs bsm" onClick={()=>{if(storeInput.trim()){const u=[...obStores,storeInput.trim()];setPrefs({...prefs,stores:u});setStoreInput("");}}}>Add</button>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:12}}>
+          <button className="btn bs" style={{flex:1}} onClick={()=>setObStep(1)}>Back</button>
+          <button className="btn bg" style={{flex:1}} onClick={()=>setObStep(3)}>Next</button>
+        </div>
+        <button style={{border:"none",background:"none",color:"var(--i3)",fontSize:13,cursor:"pointer",fontFamily:"var(--bd)",marginTop:12,textDecoration:"underline"}} onClick={finishOnboarding}>Skip for now</button>
+      </>}
+      {obStep===3&&<>
+        <div className="fg" style={{textAlign:"left"}}>
+          <label className="fl">Favourite cuisines <small>(optional)</small></label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:4}}>
+            {[
+              {name:"Italian",emoji:"🇮🇹"},
+              {name:"Mexican",emoji:"🇲🇽"},
+              {name:"Asian",emoji:"🥢"},
+              {name:"Mediterranean",emoji:"🫒"},
+              {name:"American",emoji:"🍔"},
+              {name:"Indian",emoji:"🇮🇳"},
+              {name:"Japanese",emoji:"🍱"},
+              {name:"Thai",emoji:"🇹🇭"},
+              {name:"Greek",emoji:"🇬🇷"},
+              {name:"Middle Eastern",emoji:"🧆"},
+              {name:"Korean",emoji:"🇰🇷"},
+              {name:"French",emoji:"🇫🇷"},
+            ].map(({name,emoji})=>{
+              const selected=(prefs.cuisines||[]).includes(name);
+              return <button key={name}
+                style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"10px 6px",border:`1.5px solid ${selected?"var(--ru)":"var(--sd)"}`,borderRadius:10,background:selected?"var(--rub)":"none",cursor:"pointer",fontSize:11,fontWeight:700,color:selected?"var(--ru)":"var(--i2)",transition:"all .15s"}}
+                onClick={()=>{const cur=prefs.cuisines||[];setPrefs({...prefs,cuisines:selected?cur.filter(x=>x!==name):[...cur,name]});}}>
+                <span style={{fontSize:20}}>{emoji}</span>{name}
+              </button>
+            })}
+          </div>
+        </div>
+        <div className="fg" style={{textAlign:"left"}}>
+          <label className="fl">Any dietary needs? <small>(optional)</small></label>
+          <input className="fi" value={prefs.diet} onChange={e=>setPrefs({...prefs,diet:e.target.value})} placeholder="No shellfish, low carb, kids hate mushrooms..."/>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:12}}>
+          <button className="btn bs" style={{flex:1}} onClick={()=>setObStep(2)}>Back</button>
+          <button className="btn bg" style={{flex:1}} onClick={finishOnboarding}>Let's Go</button>
+        </div>
+        <button style={{border:"none",background:"none",color:"var(--i3)",fontSize:13,cursor:"pointer",fontFamily:"var(--bd)",marginTop:12,textDecoration:"underline"}} onClick={finishOnboarding}>Skip for now</button>
+      </>}
     </div></>);
   }
 
@@ -1299,11 +1333,10 @@ Return ONLY valid JSON:
             if(shopFilter==="unchecked"&&isChecked)return null;
             if(shopFilter==="checked"&&!isChecked)return null;
             const storeTag=plan.storeMap?.[item];
-            return <div key={k} className={`shrow ${isChecked?"ck":""}`}>
-              <div className="shchk" onClick={()=>sC({...checked,[k]:!checked[k]})}>{isChecked&&I.check}</div>
-              <span style={{fontSize:14,flex:1}} onClick={()=>sC({...checked,[k]:!checked[k]})}>{item}</span>
+            return <div key={k} className={`shrow ${isChecked?"ck":""}`} onClick={()=>sC({...checked,[k]:!checked[k]})}>
+              <div className="shchk">{isChecked&&I.check}</div>
+              <span style={{fontSize:14,flex:1}}>{item}</span>
               {storeTag&&<span style={{fontSize:10,fontWeight:700,color:"var(--bl)",background:"var(--blb)",padding:"2px 6px",borderRadius:8,marginRight:4,whiteSpace:"nowrap"}}>{storeTag}</span>}
-              <button className="ib" style={{width:28,height:28}} title="Got it" onClick={()=>sC({...checked,[k]:true,})}><span style={{fontSize:11}}>✓</span></button>
             </div>
           })}
         </div>
@@ -1369,6 +1402,11 @@ Return ONLY valid JSON:
   {tab==="recipes"&&<>
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}><button className="ib" onClick={()=>setTab("home")} style={{marginLeft:-8}}>←</button><h1 className="pg-t">Recipes</h1></div>
     <p className="pg-s">{recipes.length} meals · tap ❤️ to favorite</p>
+    <input className="fi" style={{marginBottom:10}} value={recSearch} onChange={e=>setRecSearch(e.target.value)} placeholder="Search recipes..."/>
+    <div style={{display:"flex",gap:4,marginBottom:14}}>
+      <button className={`dchip ${recFilter==="all"?"on":""}`} onClick={()=>setRecFilter("all")} style={{fontSize:12,padding:"6px 12px"}}>All</button>
+      <button className={`dchip ${recFilter==="fav"?"on":""}`} onClick={()=>setRecFilter("fav")} style={{fontSize:12,padding:"6px 12px"}}>Favorites</button>
+    </div>
     <div className="cd" style={{marginBottom:14}}>
       <label className="fl">Add a recipe</label>
       <textarea className="fta" style={{minHeight:60,marginBottom:8}} value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste a recipe URL or the full recipe text..."/>
@@ -1376,13 +1414,13 @@ Return ONLY valid JSON:
       <button className="btn bg" disabled={!importText.trim()||importing||/instagram\.com/i.test(importText.trim())} onClick={importRecipe}>{importing?"Reading recipe...":importText.trim()&&/^https?:\/\//i.test(importText.trim())&&!/instagram\.com/i.test(importText.trim())?"Import from Link":"Add This Recipe"}</button>
     </div>
     <button className="btn bo" style={{marginBottom:14,width:"100%"}} onClick={()=>setModal({type:"recipe"})}>{I.plus} Type it in manually</button>
-    {recipes.map(r=><div className="rc" key={r.id}>
+    {recipes.filter(r=>recFilter==="fav"?r.favorite:true).filter(r=>!recSearch||r.name.toLowerCase().includes(recSearch.toLowerCase())).sort((a,b)=>b.favorite-a.favorite).map(r=><div className="rc" key={r.id}>
       <div className="rc-top">
         <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
           <button className={`fav-btn ${r.favorite?"on":""}`} onClick={()=>toggleFav(r.id)}>{r.favorite?I.heartOn:I.heart}</button>
           <div><div className="rc-name">{r.name}</div><div className="rc-meta"><span className="pill" style={{background:"var(--rub)",color:"var(--ru)"}}>{r.time}m</span><span className="pill" style={{background:"var(--sab)",color:"var(--sa)"}}>Serves {r.servings}</span>{r.source&&<span className="pill" style={{background:"var(--amb)",color:"var(--am)"}}>{r.source}</span>}</div></div>
         </div>
-        <div style={{display:"flex",gap:2}}><button className="ib" onClick={()=>setModal({type:"recipe",data:r})}>{I.edit}</button><button className="ib dng" onClick={()=>{sR(recipes.filter(x=>x.id!==r.id));flash("Removed")}}>{I.trash}</button></div>
+        <div style={{display:"flex",gap:2}}><button className="ib" onClick={()=>setModal({type:"recipe",data:r})}>{I.edit}</button>{confirm===r.id?<><button style={{border:"none",background:"none",color:"var(--rd)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>{sR(recipes.filter(x=>x.id!==r.id));setConfirm(null);flash("Removed")}}>Delete?</button><button style={{border:"none",background:"none",color:"var(--i3)",fontSize:12,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>setConfirm(null)}>Cancel</button></>:<button className="ib dng" onClick={()=>setConfirm(r.id)}>{I.trash}</button>}</div>
       </div>
       <div style={{cursor:"pointer",padding:"8px 0 0",fontSize:12,color:"var(--i3)",fontWeight:600}} onClick={()=>setRecExp(e=>({...e,[r.id]:!e[r.id]}))}>{recExp[r.id]?"Hide details ▲":"View details ▼"}</div>
       {recExp[r.id]&&<div className="rx"><div className="rx-lb">Ingredients</div><ul style={{listStyle:"none",padding:0,margin:0}}>{(r.ingredients||"").split(/,\s*|\n/).filter(g=>g.trim()).map((g,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",paddingLeft:16,position:"relative"}}><span style={{position:"absolute",left:0,color:"var(--i4)"}}>•</span>{g.trim()}</li>)}</ul>{r.prep&&<><div className="rx-lb">Prep Ahead</div><ol style={{paddingLeft:20,margin:0}}>{fmt(r.prep).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></>}{r.finish&&<><div className="rx-lb">Day-of</div><ol style={{paddingLeft:20,margin:0}}>{fmt(r.finish).map((s,j)=><li key={j} style={{fontSize:13,color:"var(--i2)",padding:"3px 0",lineHeight:1.5}}>{s}</li>)}</ol></>}
@@ -1426,9 +1464,9 @@ Return ONLY valid JSON:
             <button className="ib" title="Edit item" onClick={()=>setModal({type:"supply",data:s})}>
               {I.edit}
             </button>
-            <button className="ib dng" title="Remove item" onClick={()=>{sS(supplies.filter(x=>x.id!==s.id));flash("Removed");}}>
+            {confirm===s.id?<><button style={{border:"none",background:"none",color:"var(--rd)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>{sS(supplies.filter(x=>x.id!==s.id));setConfirm(null);flash("Removed")}}>Delete?</button><button style={{border:"none",background:"none",color:"var(--i3)",fontSize:12,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>setConfirm(null)}>Cancel</button></>:<button className="ib dng" title="Remove item" onClick={()=>setConfirm(s.id)}>
               {I.trash}
-            </button>
+            </button>}
           </div>
         </div>})}
       </div>
@@ -1546,7 +1584,7 @@ Return ONLY valid JSON:
       </div>
       <p style={{fontSize:13,color:"var(--i2)",marginBottom:2,fontWeight:600}}>{[user?.user_metadata?.first_name,user?.user_metadata?.last_name].filter(Boolean).join(" ")||""}</p>
       <p style={{fontSize:12,color:"var(--i3)",marginBottom:12}}>{user?.email}</p>
-      <button className="btn bo" style={{width:"100%",color:"var(--rd)",borderColor:"var(--rd)"}} onClick={async()=>{Object.values(LS).forEach(k=>localStorage.removeItem(k));await supabase.auth.signOut();}}>Sign Out</button>
+      <button className="btn bo" style={{width:"100%",color:"var(--rd)",borderColor:"var(--rd)"}} onClick={async()=>{if(!window.confirm('Sign out?'))return;Object.values(LS).forEach(k=>localStorage.removeItem(k));await supabase.auth.signOut();}}>Sign Out</button>
     </div>
   </>}
   </main>
@@ -1558,7 +1596,7 @@ Return ONLY valid JSON:
     {id:"shop",label:"Shop",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>},
     {id:"recipes",label:"Recipes",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>},
     {id:"restock",label:"Restock",icon:<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>},
-  ].map(t=><button key={t.id} className={`nb ${tab===t.id?"on":""}`} onClick={()=>setTab(t.id)}><div style={{width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center"}}>{t.icon}</div>{t.label}</button>)}</nav>
+  ].map(t=><button key={t.id} className={`nb ${tab===t.id?"on":""}`} onClick={()=>setTab(t.id)}><div style={{position:"relative",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center"}}>{t.icon}{t.id==="restock"&&overdue.length>0&&<span style={{position:"absolute",top:-1,right:-1,width:8,height:8,borderRadius:"50%",background:"var(--rd)"}}/>}</div>{t.label}</button>)}</nav>
 
   {/* ── MODALS ── */}
 
@@ -1675,7 +1713,7 @@ Return ONLY valid JSON:
           <div><span className="ph-store-badge">{p.storeName}</span>{p.total&&<span style={{fontSize:12,color:"var(--i3)"}}>{p.total}</span>}</div>
           <div style={{display:"flex",alignItems:"center",gap:6}}>
             <span style={{fontSize:11,color:"var(--i3)"}}>{p.date}</span>
-            <button className="ib dng" style={{width:28,height:28}} onClick={()=>{sPh(purchases.filter(x=>x.id!==p.id));flash("Removed")}}>{I.trash}</button>
+            {confirm===p.id?<><button style={{border:"none",background:"none",color:"var(--rd)",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>{sPh(purchases.filter(x=>x.id!==p.id));setConfirm(null);flash("Removed")}}>Delete?</button><button style={{border:"none",background:"none",color:"var(--i3)",fontSize:11,cursor:"pointer",fontFamily:"var(--bd)"}} onClick={()=>setConfirm(null)}>Cancel</button></>:<button className="ib dng" style={{width:28,height:28}} onClick={()=>setConfirm(p.id)}>{I.trash}</button>}
           </div>
         </div>
         <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
